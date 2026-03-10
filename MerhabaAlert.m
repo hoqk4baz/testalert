@@ -1,13 +1,36 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-static IMP original_didFinishLaunching;
-
-static BOOL hooked_didFinishLaunching(id self, SEL _cmd, UIApplication *application, NSDictionary *launchOptions) {
-    BOOL result = ((BOOL(*)(id, SEL, UIApplication*, NSDictionary*))original_didFinishLaunching)(self, _cmd, application, launchOptions);
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+static void showAlert() {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
+
+        UIWindow *window = nil;
+        
+        // iOS 13+ sahne bazlı pencere bul
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                UIWindowScene *windowScene = (UIWindowScene *)scene;
+                for (UIWindow *w in windowScene.windows) {
+                    if (w.isKeyWindow) {
+                        window = w;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Fallback: eski yöntem
+        if (!window) {
+            window = [UIApplication sharedApplication].keyWindow;
+        }
+        
+        if (!window) return;
+
+        UIViewController *rootVC = window.rootViewController;
+        while (rootVC.presentedViewController) {
+            rootVC = rootVC.presentedViewController;
+        }
 
         UIAlertController *alert = [UIAlertController
             alertControllerWithTitle:@"Merhaba! 👋"
@@ -28,26 +51,42 @@ static BOOL hooked_didFinishLaunching(id self, SEL _cmd, UIApplication *applicat
 
         [alert addAction:continueAction];
         [alert addAction:closeAction];
-
-        UIViewController *rootVC = application.keyWindow.rootViewController;
-        while (rootVC.presentedViewController) {
-            rootVC = rootVC.presentedViewController;
-        }
         [rootVC presentViewController:alert animated:YES completion:nil];
     });
+}
 
-    return result;
+// UIApplication'ın applicationDidBecomeActive metodunu hook'la
+// Bu tüm uygulamalarda çalışır
+static IMP original_applicationDidBecomeActive;
+static BOOL alertShown = NO;
+
+static void hooked_applicationDidBecomeActive(id self, SEL _cmd, UIApplication *application) {
+    ((void(*)(id, SEL, UIApplication*))original_applicationDidBecomeActive)(self, _cmd, application);
+    
+    if (!alertShown) {
+        alertShown = YES;
+        showAlert();
+    }
 }
 
 __attribute__((constructor))
 static void initialize() {
-    Class appDelegateClass = NSClassFromString(@"AppDelegate");
-    if (!appDelegateClass) return;
-
-    SEL sel = @selector(application:didFinishLaunchingWithOptions:);
-    Method method = class_getInstanceMethod(appDelegateClass, sel);
-    if (!method) return;
-
-    original_didFinishLaunching = method_getImplementation(method);
-    method_setImplementation(method, (IMP)hooked_didFinishLaunching);
+    // Tüm UIApplicationDelegate subclass'larını tara
+    unsigned int classCount = 0;
+    Class *classes = objc_copyClassList(&classCount);
+    
+    for (unsigned int i = 0; i < classCount; i++) {
+        Class cls = classes[i];
+        if (class_conformsToProtocol(cls, @protocol(UIApplicationDelegate))) {
+            SEL sel = @selector(applicationDidBecomeActive:);
+            Method method = class_getInstanceMethod(cls, sel);
+            if (method) {
+                original_applicationDidBecomeActive = method_getImplementation(method);
+                method_setImplementation(method, (IMP)hooked_applicationDidBecomeActive);
+                break;
+            }
+        }
+    }
+    
+    free(classes);
 }

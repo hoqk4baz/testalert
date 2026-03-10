@@ -1,0 +1,25 @@
+name: Build Dylib
+on: [push]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Compile dylib
+        run: |
+          clang -arch arm64 \
+            -dynamiclib \
+            -fobjc-arc \
+            -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
+            -framework UIKit \
+            -framework Foundation \
+            -o MerhabaAlert.dylib \
+            MerhabaAlert.m
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: MerhabaAlert.dylib
+          path: MerhabaAlert.dylib

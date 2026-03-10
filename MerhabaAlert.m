@@ -1,15 +1,11 @@
 #import <UIKit/UIKit.h>
-#import <substrate.h>  // Theos/CydiaSubstrate için
+#import <objc/runtime.h>
 
-// Uygulama tamamen yüklendiğinde çalışır
-%hook AppDelegate
+static IMP original_didFinishLaunching;
 
-- (BOOL)application:(UIApplication *)application 
-    didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+static BOOL hooked_didFinishLaunching(id self, SEL _cmd, UIApplication *application, NSDictionary *launchOptions) {
+    BOOL result = ((BOOL(*)(id, SEL, UIApplication*, NSDictionary*))original_didFinishLaunching)(self, _cmd, application, launchOptions);
 
-    BOOL result = %orig; // Orijinal metodu çalıştır
-
-    // Kısa bir gecikme ile alert göster (UI hazır olsun diye)
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
 
@@ -18,15 +14,13 @@
             message:@"Hoş geldiniz!"
             preferredStyle:UIAlertControllerStyleAlert];
 
-        // Kapat butonu - uygulamayı kapatır
         UIAlertAction *closeAction = [UIAlertAction
             actionWithTitle:@"Kapat"
             style:UIAlertActionStyleDestructive
             handler:^(UIAlertAction *action) {
-                exit(0); // Uygulamayı kapat
+                exit(0);
             }];
 
-        // Devam et butonu (isteğe bağlı)
         UIAlertAction *continueAction = [UIAlertAction
             actionWithTitle:@"Devam Et"
             style:UIAlertActionStyleDefault
@@ -35,7 +29,6 @@
         [alert addAction:continueAction];
         [alert addAction:closeAction];
 
-        // En üstteki view controller'ı bul ve alert'i göster
         UIViewController *rootVC = application.keyWindow.rootViewController;
         while (rootVC.presentedViewController) {
             rootVC = rootVC.presentedViewController;
@@ -46,4 +39,15 @@
     return result;
 }
 
-%end
+__attribute__((constructor))
+static void initialize() {
+    Class appDelegateClass = NSClassFromString(@"AppDelegate");
+    if (!appDelegateClass) return;
+
+    SEL sel = @selector(application:didFinishLaunchingWithOptions:);
+    Method method = class_getInstanceMethod(appDelegateClass, sel);
+    if (!method) return;
+
+    original_didFinishLaunching = method_getImplementation(method);
+    method_setImplementation(method, (IMP)hooked_didFinishLaunching);
+}

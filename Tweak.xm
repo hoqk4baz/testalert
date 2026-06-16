@@ -2,89 +2,77 @@
 #import <AdSupport/AdSupport.h>
 #import <objc/runtime.h>
 
-#pragma mark - Helpers
+#pragma mark - Fake Storage
 
-static NSString *randomUUID(void) {
+static NSString *kIDFA = @"fake.idfa";
+static NSString *kIDFV = @"fake.idfv";
+
+static NSString *randUUID(void) {
     return [[NSUUID UUID] UUIDString];
 }
 
-static NSString *fakeIDKey = @"fake.idfa.uuid";
-static NSString *fakeIDFVKey = @"fake.idfv.uuid";
-
-static NSString *getOrCreateFake(NSString *key) {
-    NSString *val = [[NSUserDefaults standardUserDefaults] objectForKey:key];
-    if (!val) {
-        val = randomUUID();
-        [[NSUserDefaults standardUserDefaults] setObject:val forKey:key];
-        [[NSUserDefaults standardUserDefaults] synchronize];
+static NSString *getFake(NSString *key) {
+    NSString *v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    if (!v) {
+        v = randUUID();
+        [[NSUserDefaults standardUserDefaults] setObject:v forKey:key];
     }
-    return val;
+    return v;
 }
 
-static void regenerateFakeIDs(void) {
-    [[NSUserDefaults standardUserDefaults] setObject:randomUUID() forKey:fakeIDKey];
-    [[NSUserDefaults standardUserDefaults] setObject:randomUUID() forKey:fakeIDFVKey];
-    [[NSUserDefaults standardUserDefaults] synchronize];
+static void regenerateIDs(void) {
+    [[NSUserDefaults standardUserDefaults] setObject:randUUID() forKey:kIDFA];
+    [[NSUserDefaults standardUserDefaults] setObject:randUUID() forKey:kIDFV];
 }
 
-#pragma mark - UIWindow helper
+#pragma mark - Safe Window Helper
 
-static UIViewController *topController(void) {
+static UIViewController *topVC(void) {
     UIWindow *window = nil;
 
-    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-        if (scene.activationState == UISceneActivationStateForegroundActive &&
-            [scene isKindOfClass:[UIWindowScene class]]) {
-
-            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
-                if (w.isKeyWindow) {
-                    window = w;
-                    break;
-                }
-            }
+    for (UIWindow *w in UIApplication.sharedApplication.windows) {
+        if (w.isKeyWindow) {
+            window = w;
+            break;
         }
     }
 
     return window.rootViewController;
 }
 
-#pragma mark - Hooks (IMPORTANT FIX)
+#pragma mark - Hooks (NO SUBSTRATE NEEDED)
 
 %hook UIDevice
 
 - (NSUUID *)identifierForVendor {
-    NSString *fake = getOrCreateFake(fakeIDFVKey);
-    return [[NSUUID alloc] initWithUUIDString:fake];
+    return [[NSUUID alloc] initWithUUIDString:getFake(kIDFV)];
 }
 
 %end
 
-#pragma mark - Ad ID Hook
-
 %hook ASIdentifierManager
 
 - (NSUUID *)advertisingIdentifier {
-    NSString *fake = getOrCreateFake(fakeIDKey);
-    return [[NSUUID alloc] initWithUUIDString:fake];
+    return [[NSUUID alloc] initWithUUIDString:getFake(kIDFA)];
 }
 
 %end
 
 #pragma mark - Floating Bubble
 
-@interface DeviceSpooferBubble : NSObject
-@property (nonatomic, strong) UIWindow *window;
-@property (nonatomic, strong) UIButton *button;
-@property (nonatomic, assign) BOOL isDragging;
+@interface SpooferBubble : NSObject
+@property UIWindow *window;
+@property UIButton *btn;
+@property BOOL dragging;
 @end
 
-@implementation DeviceSpooferBubble
+@implementation SpooferBubble
 
 + (instancetype)shared {
-    static DeviceSpooferBubble *s;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        s = [[self alloc] init];
+    static SpooferBubble *s;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        s = [SpooferBubble new];
     });
     return s;
 }
@@ -98,10 +86,9 @@ static UIViewController *topController(void) {
 
 - (void)setup {
 
-    UIWindowScene *scene = (UIWindowScene *)UIApplication.sharedApplication.connectedScenes.allObjects.firstObject;
+    CGRect frame = CGRectMake(200, 120, 60, 60);
 
-    self.window = [[UIWindow alloc] initWithWindowScene:scene];
-    self.window.frame = CGRectMake(250, 120, 70, 70);
+    self.window = [[UIWindow alloc] initWithFrame:frame];
     self.window.windowLevel = UIWindowLevelAlert + 1;
     self.window.backgroundColor = UIColor.clearColor;
 
@@ -110,101 +97,86 @@ static UIViewController *topController(void) {
     self.window.rootViewController = vc;
     [self.window makeKeyAndVisible];
 
-    // Blur container
-    UIVisualEffectView *blur =
-    [[UIVisualEffectView alloc] initWithEffect:
-     [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]];
+    self.btn = [UIButton buttonWithType:UIButtonTypeCustom];
+    self.btn.frame = CGRectMake(0, 0, 60, 60);
 
-    blur.frame = CGRectMake(0, 0, 70, 70);
-    blur.layer.cornerRadius = 35;
-    blur.clipsToBounds = YES;
+    self.btn.backgroundColor = [UIColor colorWithRed:0.1 green:0.6 blue:1 alpha:0.9];
+    self.btn.layer.cornerRadius = 30;
 
-    // Button
-    self.button = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.button.frame = blur.bounds;
+    // SAFE ICON (iOS 9+ compatible)
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *cfg =
+        [UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightBold];
 
-    UIImageSymbolConfiguration *cfg =
-    [UIImageSymbolConfiguration configurationWithPointSize:26 weight:UIImageSymbolWeightBold];
+        UIImage *img =
+        [UIImage systemImageNamed:@"arrow.triangle.2.circlepath"
+                    withConfiguration:cfg];
 
-    UIImage *img =
-    [UIImage systemImageNamed:@"arrow.triangle.2.circlepath.circle.fill"
-            withConfiguration:cfg];
+        [self.btn setImage:img forState:UIControlStateNormal];
+        self.btn.tintColor = UIColor.whiteColor;
+    } else {
+        [self.btn setTitle:@"↻" forState:UIControlStateNormal];
+        self.btn.titleLabel.font = [UIFont boldSystemFontOfSize:24];
+    }
 
-    [self.button setImage:img forState:UIControlStateNormal];
-    self.button.tintColor = UIColor.systemBlueColor;
+    [self.btn addTarget:self action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
 
-    [self.button addTarget:self action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
-
-    // Gesture (FIX: tap + drag conflict solved)
     UIPanGestureRecognizer *pan =
-    [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
+    [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(move:)];
     pan.cancelsTouchesInView = NO;
 
-    [self.button addGestureRecognizer:pan];
+    [self.btn addGestureRecognizer:pan];
 
-    [blur.contentView addSubview:self.button];
-    [self.window addSubview:blur];
+    [self.window addSubview:self.btn];
 }
 
-- (void)pan:(UIPanGestureRecognizer *)g {
+- (void)move:(UIPanGestureRecognizer *)g {
 
     CGPoint t = [g translationInView:self.window];
-    CGPoint center = self.window.center;
-
-    center.x += t.x;
-    center.y += t.y;
-
-    self.window.center = center;
+    self.window.center = CGPointMake(self.window.center.x + t.x,
+                                     self.window.center.y + t.y);
     [g setTranslation:CGPointZero inView:self.window];
 
-    if (g.state == UIGestureRecognizerStateBegan) {
-        self.isDragging = YES;
-    }
+    if (g.state == UIGestureRecognizerStateBegan)
+        self.dragging = YES;
 
-    if (g.state == UIGestureRecognizerStateEnded) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.15 * NSEC_PER_SEC),
+    if (g.state == UIGestureRecognizerStateEnded)
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1*NSEC_PER_SEC),
                        dispatch_get_main_queue(), ^{
-            self.isDragging = NO;
+            self.dragging = NO;
         });
-    }
 }
 
 - (void)tap {
-    if (self.isDragging) return;
+    if (self.dragging) return;
 
-    UIDevice *dev = UIDevice.currentDevice;
+    UIDevice *d = UIDevice.currentDevice;
     ASIdentifierManager *ad = [ASIdentifierManager sharedManager];
 
     NSString *msg = [NSString stringWithFormat:
-                     @"IDFV: %@\nIDFA: %@\nModel: %@\nSystem: %@ %@\nName: %@",
-                     dev.identifierForVendor.UUIDString,
+                     @"IDFV: %@\nIDFA: %@\nModel: %@\nSystem: %@ %@",
+                     d.identifierForVendor.UUIDString,
                      ad.advertisingIdentifier.UUIDString,
-                     dev.model,
-                     dev.systemName,
-                     dev.systemVersion,
-                     dev.name];
+                     d.model,
+                     d.systemName,
+                     d.systemVersion];
 
-    UIAlertController *alert =
+    UIAlertController *a =
     [UIAlertController alertControllerWithTitle:@"Device Info"
                                         message:msg
                                  preferredStyle:UIAlertControllerStyleAlert];
 
-    UIAlertAction *regen =
-    [UIAlertAction actionWithTitle:@"🔄 Yenile"
-                             style:UIAlertActionStyleDestructive
-                           handler:^(UIAlertAction * _Nonnull action) {
-        regenerateFakeIDs();
-    }];
+    [a addAction:[UIAlertAction actionWithTitle:@"Regenerate"
+                                          style:UIAlertActionStyleDestructive
+                                        handler:^(UIAlertAction * _Nonnull action) {
+        regenerateIDs();
+    }]];
 
-    UIAlertAction *close =
-    [UIAlertAction actionWithTitle:@"Kapat"
-                             style:UIAlertActionStyleCancel
-                           handler:nil];
+    [a addAction:[UIAlertAction actionWithTitle:@"Close"
+                                          style:UIAlertActionStyleCancel
+                                        handler:nil]];
 
-    [alert addAction:regen];
-    [alert addAction:close];
-
-    [topController() presentViewController:alert animated:YES completion:nil];
+    [topVC() presentViewController:a animated:YES completion:nil];
 }
 
 @end
@@ -212,8 +184,8 @@ static UIViewController *topController(void) {
 #pragma mark - Init
 
 %ctor {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
-        [DeviceSpooferBubble shared];
+        [SpooferBubble shared];
     });
 }

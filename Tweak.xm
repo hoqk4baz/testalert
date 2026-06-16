@@ -103,12 +103,10 @@ static NSString *randomString(int len) {
 }
 
 - (void)resetAndRestart {
-    // Tüm uygulama verilerini temizle
     NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
     [[NSUserDefaults standardUserDefaults] removePersistentDomainForName:bundleID];
     [[NSURLCache sharedURLCache] removeAllCachedResponses];
     
-    // Cache temizliği
     [[NSFileManager defaultManager] removeItemAtPath:NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject error:nil];
     
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"✅ Başarılı" 
@@ -124,7 +122,7 @@ static NSString *randomString(int len) {
 
 @end
 
-// ====================== DERİN SPOOF ======================
+// ====================== HOOKS ======================
 
 static NSUUID* (*orig_idfv)(id, SEL);
 static NSUUID* spoof_idfv(id self, SEL _cmd) {
@@ -140,22 +138,6 @@ static NSUUID* spoof_idfa(id self, SEL _cmd) {
     return fake;
 }
 
-// MobileGestalt Hook (daha derin)
-%hookf(CFStringRef, MGCopyAnswer, CFStringRef key) {
-    NSString *k = (__bridge NSString *)key;
-    
-    if ([k containsString:@"UniqueDeviceID"] || [k containsString:@"UDID"]) {
-        return (__bridge CFStringRef)randomUUID();
-    }
-    if ([k containsString:@"SerialNumber"]) {
-        return (__bridge CFStringRef)randomString(12);
-    }
-    if ([k isEqualToString:@"ProductType"]) {
-        return CFSTR("iPhone14,5"); // iPhone 13 gibi
-    }
-    return %orig;
-}
-
 %ctor {
     NSLog(@"[DeviceSpoofer] ✅ Güzel UI + Derin Spoof Aktif");
 
@@ -165,6 +147,7 @@ static NSUUID* spoof_idfa(id self, SEL _cmd) {
     };
     rebind_symbols(rebs, 2);
 
+    // Bubble'ı hemen başlat
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         [DeviceSpooferBubble shared];
     });

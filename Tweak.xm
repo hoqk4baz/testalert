@@ -26,9 +26,7 @@ static NSString *randomUUID(void) {
 
 - (instancetype)init {
     self = [super init];
-    if (self) {
-        [self createBubble];
-    }
+    if (self) [self createBubble];
     return self;
 }
 
@@ -78,10 +76,8 @@ static NSString *randomUUID(void) {
     [alert addAction:[UIAlertAction actionWithTitle:@"Değiştir" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
         [self resetAndRestart];
     }]];
-    
     [alert addAction:[UIAlertAction actionWithTitle:@"Kapat" style:UIAlertActionStyleCancel handler:nil]];
     
-    // DÜZELTİLMİŞ SATIR
     [[[[UIApplication sharedApplication] keyWindow] rootViewController] presentViewController:alert animated:YES completion:nil];
 }
 
@@ -94,7 +90,6 @@ static NSString *randomUUID(void) {
                                                                    message:@"Uygulama verileri temizlendi.\nYeniden başlatılıyor..."
                                                             preferredStyle:UIAlertControllerStyleAlert];
     
-    // DÜZELTİLMİŞ SATIR
     [[[[UIApplication sharedApplication] keyWindow] rootViewController] presentViewController:alert animated:YES completion:^{
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.8 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             exit(0);
@@ -104,7 +99,7 @@ static NSString *randomUUID(void) {
 
 @end
 
-// ====================== FISHHOOK SPOOF ======================
+// ====================== FISHHOOK ======================
 
 static NSUUID* (*orig_identifierForVendor)(id, SEL);
 static NSUUID* spoof_identifierForVendor(id self, SEL _cmd) {

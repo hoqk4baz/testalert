@@ -1,154 +1,219 @@
 #import <UIKit/UIKit.h>
 #import <AdSupport/AdSupport.h>
-#import <dlfcn.h>
-#import "fishhook.h"
+#import <objc/runtime.h>
+
+#pragma mark - Helpers
 
 static NSString *randomUUID(void) {
     return [[NSUUID UUID] UUIDString];
 }
 
-static NSString *randomString(int len) {
-    NSString *letters = @"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    NSMutableString *s = [NSMutableString string];
-    for (int i = 0; i < len; i++) {
-        [s appendFormat:@"%C", [letters characterAtIndex:arc4random_uniform((uint32_t)letters.length)]];
+static NSString *fakeIDKey = @"fake.idfa.uuid";
+static NSString *fakeIDFVKey = @"fake.idfv.uuid";
+
+static NSString *getOrCreateFake(NSString *key) {
+    NSString *val = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    if (!val) {
+        val = randomUUID();
+        [[NSUserDefaults standardUserDefaults] setObject:val forKey:key];
+        [[NSUserDefaults standardUserDefaults] synchronize];
     }
-    return s;
+    return val;
 }
 
-// ====================== GÜZEL FLOATING BUBBLE ======================
+static void regenerateFakeIDs(void) {
+    [[NSUserDefaults standardUserDefaults] setObject:randomUUID() forKey:fakeIDKey];
+    [[NSUserDefaults standardUserDefaults] setObject:randomUUID() forKey:fakeIDFVKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+#pragma mark - UIWindow helper
+
+static UIViewController *topController(void) {
+    UIWindow *window = nil;
+
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (scene.activationState == UISceneActivationStateForegroundActive &&
+            [scene isKindOfClass:[UIWindowScene class]]) {
+
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                if (w.isKeyWindow) {
+                    window = w;
+                    break;
+                }
+            }
+        }
+    }
+
+    return window.rootViewController;
+}
+
+#pragma mark - Hooks (IMPORTANT FIX)
+
+%hook UIDevice
+
+- (NSUUID *)identifierForVendor {
+    NSString *fake = getOrCreateFake(fakeIDFVKey);
+    return [[NSUUID alloc] initWithUUIDString:fake];
+}
+
+%end
+
+#pragma mark - Ad ID Hook
+
+%hook ASIdentifierManager
+
+- (NSUUID *)advertisingIdentifier {
+    NSString *fake = getOrCreateFake(fakeIDKey);
+    return [[NSUUID alloc] initWithUUIDString:fake];
+}
+
+%end
+
+#pragma mark - Floating Bubble
+
 @interface DeviceSpooferBubble : NSObject
 @property (nonatomic, strong) UIWindow *window;
-@property (nonatomic, strong) UIButton *bubble;
+@property (nonatomic, strong) UIButton *button;
+@property (nonatomic, assign) BOOL isDragging;
 @end
 
 @implementation DeviceSpooferBubble
 
 + (instancetype)shared {
-    static DeviceSpooferBubble *shared = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ shared = [[self alloc] init]; });
-    return shared;
+    static DeviceSpooferBubble *s;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        s = [[self alloc] init];
+    });
+    return s;
 }
 
 - (instancetype)init {
-    self = [super init];
-    if (self) [self createBubble];
+    if (self = [super init]) {
+        [self setup];
+    }
     return self;
 }
 
-- (void)createBubble {
-    CGRect screen = [[UIScreen mainScreen] bounds];
-    self.window = [[UIWindow alloc] initWithFrame:CGRectMake(screen.size.width - 75, 120, 65, 65)];
-    self.window.windowLevel = UIWindowLevelAlert + 200;
-    self.window.backgroundColor = [UIColor clearColor];
-    self.window.hidden = NO;
+- (void)setup {
 
-    self.bubble = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.bubble.frame = CGRectMake(0, 0, 65, 65);
-    self.bubble.backgroundColor = [UIColor colorWithRed:0.0 green:0.48 blue:1.0 alpha:0.95];
-    self.bubble.layer.cornerRadius = 32.5;
-    self.bubble.layer.shadowColor = [UIColor blackColor].CGColor;
-    self.bubble.layer.shadowOffset = CGSizeMake(0, 4);
-    self.bubble.layer.shadowRadius = 8;
-    self.bubble.layer.shadowOpacity = 0.6;
-    
-    [self.bubble setTitle:@"🔄" forState:UIControlStateNormal];
-    self.bubble.titleLabel.font = [UIFont systemFontOfSize:35 weight:UIFontWeightBold];
-    
-    [self.bubble addTarget:self action:@selector(showPanel) forControlEvents:UIControlEventTouchUpInside];
-    
-    UIViewController *vc = [[UIViewController alloc] init];
-    vc.view.backgroundColor = [UIColor clearColor];
-    [vc.view addSubview:self.bubble];
+    UIWindowScene *scene = (UIWindowScene *)UIApplication.sharedApplication.connectedScenes.allObjects.firstObject;
+
+    self.window = [[UIWindow alloc] initWithWindowScene:scene];
+    self.window.frame = CGRectMake(250, 120, 70, 70);
+    self.window.windowLevel = UIWindowLevelAlert + 1;
+    self.window.backgroundColor = UIColor.clearColor;
+
+    UIViewController *vc = [UIViewController new];
+    vc.view.backgroundColor = UIColor.clearColor;
     self.window.rootViewController = vc;
+    [self.window makeKeyAndVisible];
 
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
-    [self.bubble addGestureRecognizer:pan];
+    // Blur container
+    UIVisualEffectView *blur =
+    [[UIVisualEffectView alloc] initWithEffect:
+     [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]];
+
+    blur.frame = CGRectMake(0, 0, 70, 70);
+    blur.layer.cornerRadius = 35;
+    blur.clipsToBounds = YES;
+
+    // Button
+    self.button = [UIButton buttonWithType:UIButtonTypeCustom];
+    self.button.frame = blur.bounds;
+
+    UIImageSymbolConfiguration *cfg =
+    [UIImageSymbolConfiguration configurationWithPointSize:26 weight:UIImageSymbolWeightBold];
+
+    UIImage *img =
+    [UIImage systemImageNamed:@"arrow.triangle.2.circlepath.circle.fill"
+            withConfiguration:cfg];
+
+    [self.button setImage:img forState:UIControlStateNormal];
+    self.button.tintColor = UIColor.systemBlueColor;
+
+    [self.button addTarget:self action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
+
+    // Gesture (FIX: tap + drag conflict solved)
+    UIPanGestureRecognizer *pan =
+    [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
+    pan.cancelsTouchesInView = NO;
+
+    [self.button addGestureRecognizer:pan];
+
+    [blur.contentView addSubview:self.button];
+    [self.window addSubview:blur];
 }
 
-- (void)handlePan:(UIPanGestureRecognizer *)pan {
-    CGPoint translation = [pan translationInView:self.window];
-    CGPoint center = self.bubble.center;
-    center.x += translation.x;
-    center.y += translation.y;
-    self.bubble.center = center;
-    [pan setTranslation:CGPointZero inView:self.window];
-}
+- (void)pan:(UIPanGestureRecognizer *)g {
 
-- (void)showPanel {
-    NSMutableString *info = [NSMutableString string];
-    UIDevice *dev = [UIDevice currentDevice];
-    ASIdentifierManager *idm = [ASIdentifierManager sharedManager];
-    
-    [info appendFormat:@"IDFV: %@\n", dev.identifierForVendor.UUIDString ?: @"-"];
-    [info appendFormat:@"IDFA: %@\n", idm.advertisingIdentifier.UUIDString ?: @"-"];
-    [info appendFormat:@"Model: %@\n", dev.model];
-    [info appendFormat:@"System: %@ %@\n", dev.systemName, dev.systemVersion];
-    [info appendFormat:@"Name: %@\n", dev.name];
+    CGPoint t = [g translationInView:self.window];
+    CGPoint center = self.window.center;
 
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Device Spoofer"
-                                                                   message:info
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    
-    [alert addAction:[UIAlertAction actionWithTitle:@"🔄 Değiştir & Yeniden Başlat" 
-                                              style:UIAlertActionStyleDestructive 
-                                            handler:^(UIAlertAction *action) {
-        [self resetAndRestart];
-    }]];
-    
-    [alert addAction:[UIAlertAction actionWithTitle:@"Kapat" style:UIAlertActionStyleCancel handler:nil]];
-    
-    [[[[UIApplication sharedApplication] keyWindow] rootViewController] presentViewController:alert animated:YES completion:nil];
-}
+    center.x += t.x;
+    center.y += t.y;
 
-- (void)resetAndRestart {
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
-    [[NSUserDefaults standardUserDefaults] removePersistentDomainForName:bundleID];
-    [[NSURLCache sharedURLCache] removeAllCachedResponses];
-    
-    [[NSFileManager defaultManager] removeItemAtPath:NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject error:nil];
-    
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"✅ Başarılı" 
-                                                                   message:@"Tüm cihaz bilgileri değiştirildi.\nUygulama yeniden başlatılıyor..." 
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    
-    [[[[UIApplication sharedApplication] keyWindow] rootViewController] presentViewController:alert animated:YES completion:^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.8 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            exit(0);
+    self.window.center = center;
+    [g setTranslation:CGPointZero inView:self.window];
+
+    if (g.state == UIGestureRecognizerStateBegan) {
+        self.isDragging = YES;
+    }
+
+    if (g.state == UIGestureRecognizerStateEnded) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.15 * NSEC_PER_SEC),
+                       dispatch_get_main_queue(), ^{
+            self.isDragging = NO;
         });
+    }
+}
+
+- (void)tap {
+    if (self.isDragging) return;
+
+    UIDevice *dev = UIDevice.currentDevice;
+    ASIdentifierManager *ad = [ASIdentifierManager sharedManager];
+
+    NSString *msg = [NSString stringWithFormat:
+                     @"IDFV: %@\nIDFA: %@\nModel: %@\nSystem: %@ %@\nName: %@",
+                     dev.identifierForVendor.UUIDString,
+                     ad.advertisingIdentifier.UUIDString,
+                     dev.model,
+                     dev.systemName,
+                     dev.systemVersion,
+                     dev.name];
+
+    UIAlertController *alert =
+    [UIAlertController alertControllerWithTitle:@"Device Info"
+                                        message:msg
+                                 preferredStyle:UIAlertControllerStyleAlert];
+
+    UIAlertAction *regen =
+    [UIAlertAction actionWithTitle:@"🔄 Yenile"
+                             style:UIAlertActionStyleDestructive
+                           handler:^(UIAlertAction * _Nonnull action) {
+        regenerateFakeIDs();
     }];
+
+    UIAlertAction *close =
+    [UIAlertAction actionWithTitle:@"Kapat"
+                             style:UIAlertActionStyleCancel
+                           handler:nil];
+
+    [alert addAction:regen];
+    [alert addAction:close];
+
+    [topController() presentViewController:alert animated:YES completion:nil];
 }
 
 @end
 
-// ====================== HOOKS ======================
-
-static NSUUID* (*orig_idfv)(id, SEL);
-static NSUUID* spoof_idfv(id self, SEL _cmd) {
-    static NSUUID *fake = nil;
-    if (!fake) fake = [[NSUUID alloc] initWithUUIDString:randomUUID()];
-    return fake;
-}
-
-static NSUUID* (*orig_idfa)(id, SEL);
-static NSUUID* spoof_idfa(id self, SEL _cmd) {
-    static NSUUID *fake = nil;
-    if (!fake) fake = [[NSUUID alloc] initWithUUIDString:randomUUID()];
-    return fake;
-}
+#pragma mark - Init
 
 %ctor {
-    NSLog(@"[DeviceSpoofer] ✅ Güzel UI + Derin Spoof Aktif");
-
-    struct rebinding rebs[] = {
-        {"identifierForVendor", (void*)spoof_idfv, (void**)&orig_idfv},
-        {"advertisingIdentifier", (void*)spoof_idfa, (void**)&orig_idfa},
-    };
-    rebind_symbols(rebs, 2);
-
-    // Bubble'ı hemen başlat
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC),
+                   dispatch_get_main_queue(), ^{
         [DeviceSpooferBubble shared];
     });
 }

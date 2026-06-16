@@ -1,12 +1,14 @@
+TARGET := iphone:clang:latest:9.0
+ARCHS = arm64
+
+INSTALL_TARGET_PROCESSES = SpringBoard
+
 include $(THEOS)/makefiles/common.mk
 
-LIBRARY_NAME = DeviceSpoofer
-DeviceSpoofer_FILES = Tweak.xm fishhook.c
-DeviceSpoofer_CFLAGS = -fobjc-arc -Wno-error
-DeviceSpoofer_LDFLAGS = -framework UIKit -framework AdSupport -framework CoreFoundation
+TWEAK_NAME = DeviceSpoofer
 
-# ÖNEMLİ: Sadece arm64 build et (armv7'yi kaldır)
-ARCHS = arm64 arm64e
-TARGET = iphone:clang:latest:12.0   # Minimum iOS 12
+DeviceSpoofer_FILES = Tweak.xm
+DeviceSpoofer_CFLAGS = -fobjc-arc
+DeviceSpoofer_LDFLAGS += -Wl,-undefined,dynamic_lookup
 
-include $(THEOS_MAKE_PATH)/library.mk
+include $(THEOS_MAKE_PATH)/tweak.mk

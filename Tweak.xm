@@ -1,24 +1,25 @@
 #import <UIKit/UIKit.h>
 #import <AdSupport/AdSupport.h>
-#import <objc/runtime.h>
+#import <WebKit/WebKit.h>
 
-#pragma mark - =========================
-#pragma mark DEVICE IDENTITY ENGINE
-#pragma mark =========================
+#pragma mark - =====================
+#pragma mark DEVICE ID MANAGER
+#pragma mark =====================
 
-@interface DeviceIdentityManager : NSObject
+@interface DIManager : NSObject
 @property (nonatomic, strong) NSString *fakeIDFV;
 @property (nonatomic, strong) NSString *fakeIDFA;
 + (instancetype)shared;
+- (void)generate;
 @end
 
-@implementation DeviceIdentityManager
+@implementation DIManager
 
 + (instancetype)shared {
-    static DeviceIdentityManager *m;
+    static DIManager *m;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        m = [DeviceIdentityManager new];
+        m = [DIManager new];
         [m generate];
     });
     return m;
@@ -33,64 +34,76 @@
     self.fakeIDFA = [self uuid];
 }
 
-- (void)reset {
-    [self generate];
-}
-
 @end
 
-#pragma mark - =========================
-#pragma mark REAL DEVICE INFO
-#pragma mark =========================
+#pragma mark - =====================
+#pragma mark RESET ENGINE (FULL WIPE)
+#pragma mark =====================
 
-static NSString *realDeviceInfo() {
+static void fullAppReset(void) {
 
-    UIDevice *d = UIDevice.currentDevice;
-    ASIdentifierManager *ad = [ASIdentifierManager sharedManager];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *home = NSHomeDirectory();
 
-    return [NSString stringWithFormat:
-@"📱 REAL DEVICE\n\n"
-"Model: %@\n"
-"System: %@ %@\n"
-"Name: %@\n"
-"REAL IDFV: %@\n"
-"REAL IDFA: %@",
-d.model,
-d.systemName,
-d.systemVersion,
-d.name,
-d.identifierForVendor.UUIDString,
-ad.advertisingIdentifier.UUIDString];
+    NSArray *targets = @[
+        home,
+        [home stringByAppendingPathComponent:@"Documents"],
+        [home stringByAppendingPathComponent:@"Library"],
+        [home stringByAppendingPathComponent:@"Library/Caches"],
+        NSTemporaryDirectory()
+    ];
+
+    for (NSString *path in targets) {
+
+        NSArray *items = [fm contentsOfDirectoryAtPath:path error:nil];
+
+        for (NSString *item in items) {
+            NSString *full = [path stringByAppendingPathComponent:item];
+            [fm removeItemAtPath:full error:nil];
+        }
+    }
+
+    // UserDefaults
+    [[NSUserDefaults standardUserDefaults] removePersistentDomainForName:
+     [[NSBundle mainBundle] bundleIdentifier]];
+
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    // URLCache
+    [[NSURLCache sharedURLCache] removeAllCachedResponses];
+
+    // Cookies
+    NSHTTPCookieStorage *cookie = [NSHTTPCookieStorage sharedHTTPCookieStorage];
+    for (NSHTTPCookie *c in cookie.cookies) {
+        [cookie deleteCookie:c];
+    }
+
+    // WKWebView data (modern apps için önemli)
+    if (@available(iOS 9.0, *)) {
+        NSSet *types = [NSSet setWithArray:@[
+            WKWebsiteDataTypeCookies,
+            WKWebsiteDataTypeLocalStorage,
+            WKWebsiteDataTypeSessionStorage,
+            WKWebsiteDataTypeIndexedDBDatabases,
+            WKWebsiteDataTypeWebSQLDatabases
+        ]];
+
+        [[WKWebsiteDataStore defaultDataStore]
+         removeDataOfTypes:types
+         modifiedSince:[NSDate dateWithTimeIntervalSince1970:0]
+         completionHandler:^{}];
+    }
 }
 
-#pragma mark - =========================
-#pragma mark FAKE DEVICE INFO
-#pragma mark =========================
-
-static NSString *fakeDeviceInfo() {
-
-    DeviceIdentityManager *m = [DeviceIdentityManager shared];
-    UIDevice *d = UIDevice.currentDevice;
-
-    return [NSString stringWithFormat:
-@"🎭 FAKE DEVICE (DYLIB)\n\n"
-"Fake IDFV: %@\n"
-"Fake IDFA: %@\n"
-"Model: %@",
-m.fakeIDFV,
-m.fakeIDFA,
-d.model];
-}
-
-#pragma mark - =========================
+#pragma mark - =====================
 #pragma mark HOOKS
-#pragma mark =========================
+#pragma mark =====================
 
 %hook UIDevice
 
 - (NSUUID *)identifierForVendor {
     return [[NSUUID alloc] initWithUUIDString:
-            [DeviceIdentityManager shared].fakeIDFV];
+            [DIManager shared].fakeIDFV];
 }
 
 %end
@@ -99,75 +112,66 @@ d.model];
 
 - (NSUUID *)advertisingIdentifier {
     return [[NSUUID alloc] initWithUUIDString:
-            [DeviceIdentityManager shared].fakeIDFA];
+            [DIManager shared].fakeIDFA];
 }
 
 %end
 
-#pragma mark - =========================
-#pragma mark RESET APP DATA
-#pragma mark =========================
+#pragma mark - =====================
+#pragma mark REAL + FAKE INFO
+#pragma mark =====================
 
-static void fullResetSandbox() {
+static NSString *realInfo(void) {
+    UIDevice *d = UIDevice.currentDevice;
+    ASIdentifierManager *ad = [ASIdentifierManager sharedManager];
 
-    NSFileManager *fm = NSFileManager.defaultManager;
-
-    NSString *home = NSHomeDirectory();
-
-    NSArray *paths = @[
-        home,
-        [home stringByAppendingPathComponent:@"Documents"],
-        [home stringByAppendingPathComponent:@"Library"],
-        [home stringByAppendingPathComponent:@"Library/Caches"],
-        NSTemporaryDirectory()
-    ];
-
-    for (NSString *p in paths) {
-
-        NSArray *items = [fm contentsOfDirectoryAtPath:p error:nil];
-
-        for (NSString *i in items) {
-            NSString *fp = [p stringByAppendingPathComponent:i];
-            [fm removeItemAtPath:fp error:nil];
-        }
-    }
-
-    [[NSUserDefaults standardUserDefaults]
-     removePersistentDomainForName:
-     [[NSBundle mainBundle] bundleIdentifier]];
+    return [NSString stringWithFormat:
+@"REAL DEVICE\n\nModel: %@\nSystem: %@ %@\nIDFV: %@\nIDFA: %@",
+d.model,
+d.systemName,
+d.systemVersion,
+d.identifierForVendor.UUIDString,
+ad.advertisingIdentifier.UUIDString];
 }
 
-#pragma mark - =========================
+static NSString *fakeInfo(void) {
+    DIManager *m = [DIManager shared];
+
+    return [NSString stringWithFormat:
+@"FAKE DEVICE\n\nIDFV: %@\nIDFA: %@",
+m.fakeIDFV,
+m.fakeIDFA];
+}
+
+#pragma mark - =====================
 #pragma mark TOP VC
-#pragma mark =========================
+#pragma mark =====================
 
-static UIViewController *topVC() {
-
+static UIViewController *topVC(void) {
     for (UIWindow *w in UIApplication.sharedApplication.windows) {
         if (w.isKeyWindow) return w.rootViewController;
     }
     return nil;
 }
 
-#pragma mark - =========================
+#pragma mark - =====================
 #pragma mark FLOATING UI
-#pragma mark =========================
+#pragma mark =====================
 
-@interface FloatingPanel : NSObject
-@property UIWindow *window;
+@interface Bubble : NSObject
 @property UIView *bubble;
 @property BOOL dragging;
 @end
 
-@implementation FloatingPanel
+@implementation Bubble
 
 + (instancetype)shared {
-    static FloatingPanel *p;
+    static Bubble *b;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        p = [FloatingPanel new];
+        b = [Bubble new];
     });
-    return p;
+    return b;
 }
 
 - (instancetype)init {
@@ -179,84 +183,62 @@ static UIViewController *topVC() {
 
 - (void)setup {
 
-    self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    self.window.windowLevel = UIWindowLevelAlert + 1;
-    self.window.backgroundColor = UIColor.clearColor;
-    self.window.hidden = NO;
+    UIWindow *w = UIApplication.sharedApplication.windows.firstObject;
 
-    self.bubble = [[UIView alloc] initWithFrame:CGRectMake(180, 220, 80, 80)];
-    self.bubble.layer.cornerRadius = 40;
+    self.bubble = [[UIView alloc] initWithFrame:CGRectMake(180, 250, 80, 80)];
     self.bubble.backgroundColor =
-    [[UIColor systemBlueColor] colorWithAlphaComponent:0.85];
+    [[UIColor systemBlueColor] colorWithAlphaComponent:0.9];
 
-    self.bubble.layer.shadowColor = UIColor.blackColor.CGColor;
-    self.bubble.layer.shadowOpacity = 0.25;
-    self.bubble.layer.shadowRadius = 18;
-    self.bubble.layer.shadowOffset = CGSizeMake(0, 10);
+    self.bubble.layer.cornerRadius = 40;
 
     UILabel *l = [[UILabel alloc] initWithFrame:self.bubble.bounds];
     l.text = @"ID";
     l.textAlignment = NSTextAlignmentCenter;
-    l.font = [UIFont boldSystemFontOfSize:22];
     l.textColor = UIColor.whiteColor;
+    l.font = [UIFont boldSystemFontOfSize:20];
 
     [self.bubble addSubview:l];
-
-    UIPanGestureRecognizer *pan =
-    [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(move:)];
-    [self.bubble addGestureRecognizer:pan];
 
     UITapGestureRecognizer *tap =
     [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(open)];
 
     [self.bubble addGestureRecognizer:tap];
 
-    [self.window addSubview:self.bubble];
+    UIPanGestureRecognizer *pan =
+    [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(move:)];
+    [self.bubble addGestureRecognizer:pan];
+
+    [w addSubview:self.bubble];
 }
 
 - (void)move:(UIPanGestureRecognizer *)g {
-
-    CGPoint t = [g translationInView:self.window];
-
-    self.window.center = CGPointMake(self.window.center.x + t.x,
-                                     self.window.center.y + t.y);
-
-    [g setTranslation:CGPointZero inView:self.window];
-
-    if (g.state == UIGestureRecognizerStateBegan)
-        self.dragging = YES;
-
-    if (g.state == UIGestureRecognizerStateEnded)
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1*NSEC_PER_SEC),
-                       dispatch_get_main_queue(), ^{
-            self.dragging = NO;
-        });
+    CGPoint t = [g translationInView:self.bubble.superview];
+    self.bubble.center = CGPointMake(self.bubble.center.x + t.x,
+                                     self.bubble.center.y + t.y);
+    [g setTranslation:CGPointZero inView:self.bubble.superview];
 }
 
 - (void)open {
 
-    if (self.dragging) return;
+    DIManager *m = [DIManager shared];
 
-    DeviceIdentityManager *m = [DeviceIdentityManager shared];
-
-    NSString *msg =
-    [NSString stringWithFormat:@"%@\n\n%@", realDeviceInfo(), fakeDeviceInfo()];
+    NSString *msg = [NSString stringWithFormat:@"%@\n\n%@", realInfo(), fakeInfo()];
 
     UIAlertController *a =
-    [UIAlertController alertControllerWithTitle:@"Device Identity Panel"
+    [UIAlertController alertControllerWithTitle:@"Device Panel"
                                         message:msg
                                  preferredStyle:UIAlertControllerStyleAlert];
 
-    [a addAction:[UIAlertAction actionWithTitle:@"🔄 Regenerate Identity"
-                                          style:UIAlertActionStyleDestructive
+    [a addAction:[UIAlertAction actionWithTitle:@"🔄 Regenerate IDs"
+                                          style:UIAlertActionStyleDefault
                                         handler:^(UIAlertAction * _Nonnull action) {
-        [m reset];
+        [m generate];
     }]];
 
-    [a addAction:[UIAlertAction actionWithTitle:@"🧹 Full Reset App Data"
+    [a addAction:[UIAlertAction actionWithTitle:@"🧹 RESET APP (FULL WIPE)"
                                           style:UIAlertActionStyleDestructive
                                         handler:^(UIAlertAction * _Nonnull action) {
-        fullResetSandbox();
+        fullAppReset();
     }]];
 
     [a addAction:[UIAlertAction actionWithTitle:@"Close"
@@ -268,13 +250,13 @@ static UIViewController *topVC() {
 
 @end
 
-#pragma mark - =========================
+#pragma mark - =====================
 #pragma mark INIT
-#pragma mark =========================
+#pragma mark =====================
 
 %ctor {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1*NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
-        [FloatingPanel shared];
+        [Bubble shared];
     });
 }

@@ -7,15 +7,6 @@ static NSString *randomUUID(void) {
     return [[NSUUID UUID] UUIDString];
 }
 
-static NSString *randomString(int length) {
-    NSString *letters = @"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    NSMutableString *s = [NSMutableString stringWithCapacity:length];
-    for (int i = 0; i < length; i++) {
-        [s appendFormat:@"%C", [letters characterAtIndex:arc4random_uniform((uint32_t)letters.length)]];
-    }
-    return s;
-}
-
 // ====================== FLOATING BUBBLE ======================
 @interface DeviceSpooferBubble : NSObject
 @property (nonatomic, strong) UIWindow *window;
@@ -51,10 +42,6 @@ static NSString *randomString(int length) {
     self.bubbleButton.frame = CGRectMake(0, 0, 60, 60);
     self.bubbleButton.backgroundColor = [UIColor systemBlueColor];
     self.bubbleButton.layer.cornerRadius = 30;
-    self.bubbleButton.layer.shadowColor = [UIColor blackColor].CGColor;
-    self.bubbleButton.layer.shadowOffset = CGSizeMake(0, 2);
-    self.bubbleButton.layer.shadowOpacity = 0.4;
-    
     [self.bubbleButton setTitle:@"🔄" forState:UIControlStateNormal];
     self.bubbleButton.titleLabel.font = [UIFont systemFontOfSize:28];
     
@@ -94,7 +81,8 @@ static NSString *randomString(int length) {
     
     [alert addAction:[UIAlertAction actionWithTitle:@"Kapat" style:UIAlertActionStyleCancel handler:nil]];
     
-    [[[UIApplication sharedApplication] keyWindow] rootViewController] presentViewController:alert animated:YES completion:nil];
+    // DÜZELTİLMİŞ SATIR
+    [[[[UIApplication sharedApplication] keyWindow] rootViewController] presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)resetAndRestart {
@@ -106,7 +94,8 @@ static NSString *randomString(int length) {
                                                                    message:@"Uygulama verileri temizlendi.\nYeniden başlatılıyor..."
                                                             preferredStyle:UIAlertControllerStyleAlert];
     
-    [[[UIApplication sharedApplication] keyWindow] rootViewController] presentViewController:alert animated:YES completion:^{
+    // DÜZELTİLMİŞ SATIR
+    [[[[UIApplication sharedApplication] keyWindow] rootViewController] presentViewController:alert animated:YES completion:^{
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.8 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             exit(0);
         });
@@ -134,7 +123,6 @@ static NSUUID* spoof_advertisingIdentifier(id self, SEL _cmd) {
 %ctor {
     NSLog(@"[DeviceSpoofer] ✅ Jailbreak'siz Floating Bubble Loaded");
 
-    // Hook'ları kur
     struct rebinding rebindings[] = {
         {"identifierForVendor", (void *)spoof_identifierForVendor, (void **)&orig_identifierForVendor},
         {"advertisingIdentifier", (void *)spoof_advertisingIdentifier, (void **)&orig_advertisingIdentifier},

@@ -1,51 +1,97 @@
 #import <UIKit/UIKit.h>
 #import <AdSupport/AdSupport.h>
-#import <objc/runtime.h>
 
-#pragma mark - Fake Storage
+#pragma mark - FAKE STORAGE
 
-static NSString *kIDFA = @"fake.idfa";
-static NSString *kIDFV = @"fake.idfv";
+static NSString *fakeIDFV;
+static NSString *fakeIDFA;
 
-static NSString *randUUID(void) {
+static NSString *UUIDGen() {
     return [[NSUUID UUID] UUIDString];
 }
 
-static NSString *getFake(NSString *key) {
-    NSString *v = [[NSUserDefaults standardUserDefaults] objectForKey:key];
-    if (!v) {
-        v = randUUID();
-        [[NSUserDefaults standardUserDefaults] setObject:v forKey:key];
-    }
-    return v;
+static void ensureFake() {
+    if (!fakeIDFV) fakeIDFV = UUIDGen();
+    if (!fakeIDFA) fakeIDFA = UUIDGen();
 }
 
-static void regenerateIDs(void) {
-    [[NSUserDefaults standardUserDefaults] setObject:randUUID() forKey:kIDFA];
-    [[NSUserDefaults standardUserDefaults] setObject:randUUID() forKey:kIDFV];
+static void regenerateIDs() {
+    fakeIDFV = UUIDGen();
+    fakeIDFA = UUIDGen();
 }
 
-#pragma mark - Safe Window Helper
+#pragma mark - REAL DEVICE INFO
 
-static UIViewController *topVC(void) {
-    UIWindow *window = nil;
+static NSString *realDeviceInfo() {
+    UIDevice *d = UIDevice.currentDevice;
+    ASIdentifierManager *ad = [ASIdentifierManager sharedManager];
 
-    for (UIWindow *w in UIApplication.sharedApplication.windows) {
-        if (w.isKeyWindow) {
-            window = w;
-            break;
+    return [NSString stringWithFormat:
+            @"📱 REAL DEVICE INFO\n\n"
+            @"Model: %@\n"
+            @"System: %@ %@\n"
+            @"Name: %@\n"
+            @"REAL IDFV: %@\n"
+            @"REAL IDFA: %@",
+            d.model,
+            d.systemName,
+            d.systemVersion,
+            d.name,
+            d.identifierForVendor.UUIDString,
+            ad.advertisingIdentifier.UUIDString];
+}
+
+static NSString *fakeDeviceInfo() {
+    ensureFake();
+
+    UIDevice *d = UIDevice.currentDevice;
+
+    return [NSString stringWithFormat:
+            @"🎭 SPOOFED INFO\n\n"
+            @"Fake IDFV: %@\n"
+            @"Fake IDFA: %@\n"
+            @"Model: %@",
+            fakeIDFV,
+            fakeIDFA,
+            d.model];
+}
+
+#pragma mark - RESET APP DATA
+
+static void fullResetAppData() {
+
+    NSFileManager *fm = NSFileManager.defaultManager;
+
+    NSArray *paths = @[
+        NSHomeDirectory(),
+        [NSHomeDirectory() stringByAppendingPathComponent:@"Library"],
+        [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"],
+        [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Caches"],
+        NSTemporaryDirectory()
+    ];
+
+    for (NSString *path in paths) {
+        NSError *err = nil;
+        NSArray *items = [fm contentsOfDirectoryAtPath:path error:&err];
+        for (NSString *item in items) {
+            NSString *full = [path stringByAppendingPathComponent:item];
+            [fm removeItemAtPath:full error:nil];
         }
     }
 
-    return window.rootViewController;
+    [[NSUserDefaults standardUserDefaults] removePersistentDomainForName:
+     [[NSBundle mainBundle] bundleIdentifier]];
+
+    [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
-#pragma mark - Hooks (NO SUBSTRATE NEEDED)
+#pragma mark - HOOKS (SPOOF)
 
 %hook UIDevice
 
 - (NSUUID *)identifierForVendor {
-    return [[NSUUID alloc] initWithUUIDString:getFake(kIDFV)];
+    ensureFake();
+    return [[NSUUID alloc] initWithUUIDString:fakeIDFV];
 }
 
 %end
@@ -53,28 +99,38 @@ static UIViewController *topVC(void) {
 %hook ASIdentifierManager
 
 - (NSUUID *)advertisingIdentifier {
-    return [[NSUUID alloc] initWithUUIDString:getFake(kIDFA)];
+    ensureFake();
+    return [[NSUUID alloc] initWithUUIDString:fakeIDFA];
 }
 
 %end
 
-#pragma mark - Floating Bubble
+#pragma mark - TOP VC
 
-@interface SpooferBubble : NSObject
+static UIViewController *topVC() {
+    for (UIWindow *w in UIApplication.sharedApplication.windows) {
+        if (w.isKeyWindow) return w.rootViewController;
+    }
+    return nil;
+}
+
+#pragma mark - UI BUBBLE
+
+@interface Bubble : NSObject
 @property UIWindow *window;
 @property UIButton *btn;
 @property BOOL dragging;
 @end
 
-@implementation SpooferBubble
+@implementation Bubble
 
 + (instancetype)shared {
-    static SpooferBubble *s;
+    static Bubble *b;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        s = [SpooferBubble new];
+        b = [Bubble new];
     });
-    return s;
+    return b;
 }
 
 - (instancetype)init {
@@ -86,9 +142,7 @@ static UIViewController *topVC(void) {
 
 - (void)setup {
 
-    CGRect frame = CGRectMake(200, 120, 60, 60);
-
-    self.window = [[UIWindow alloc] initWithFrame:frame];
+    self.window = [[UIWindow alloc] initWithFrame:CGRectMake(200, 120, 72, 72)];
     self.window.windowLevel = UIWindowLevelAlert + 1;
     self.window.backgroundColor = UIColor.clearColor;
 
@@ -97,29 +151,35 @@ static UIViewController *topVC(void) {
     self.window.rootViewController = vc;
     [self.window makeKeyAndVisible];
 
+    UIVisualEffectView *glass =
+    [[UIVisualEffectView alloc] initWithEffect:
+     [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]];
+
+    glass.frame = CGRectMake(0, 0, 72, 72);
+    glass.layer.cornerRadius = 36;
+    glass.clipsToBounds = YES;
+
+    glass.layer.shadowColor = UIColor.blackColor.CGColor;
+    glass.layer.shadowOpacity = 0.25;
+    glass.layer.shadowRadius = 15;
+    glass.layer.shadowOffset = CGSizeMake(0, 10);
+
     self.btn = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.btn.frame = CGRectMake(0, 0, 60, 60);
+    self.btn.frame = glass.bounds;
 
-    self.btn.backgroundColor = [UIColor colorWithRed:0.1 green:0.6 blue:1 alpha:0.9];
-    self.btn.layer.cornerRadius = 30;
-
-    // SAFE ICON (iOS 9+ compatible)
     if (@available(iOS 13.0, *)) {
-        UIImageSymbolConfiguration *cfg =
-        [UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightBold];
-
         UIImage *img =
-        [UIImage systemImageNamed:@"arrow.triangle.2.circlepath"
-                    withConfiguration:cfg];
+        [UIImage systemImageNamed:@"iphone.circle.fill"];
 
+        self.btn.tintColor = UIColor.systemBlueColor;
         [self.btn setImage:img forState:UIControlStateNormal];
-        self.btn.tintColor = UIColor.whiteColor;
     } else {
-        [self.btn setTitle:@"↻" forState:UIControlStateNormal];
-        self.btn.titleLabel.font = [UIFont boldSystemFontOfSize:24];
+        [self.btn setTitle:@"📱" forState:UIControlStateNormal];
+        self.btn.titleLabel.font = [UIFont boldSystemFontOfSize:20];
     }
 
-    [self.btn addTarget:self action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
+    [self.btn addTarget:self action:@selector(openPanel)
+        forControlEvents:UIControlEventTouchUpInside];
 
     UIPanGestureRecognizer *pan =
     [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(move:)];
@@ -127,7 +187,8 @@ static UIViewController *topVC(void) {
 
     [self.btn addGestureRecognizer:pan];
 
-    [self.window addSubview:self.btn];
+    [glass.contentView addSubview:self.btn];
+    [self.window addSubview:glass];
 }
 
 - (void)move:(UIPanGestureRecognizer *)g {
@@ -147,29 +208,26 @@ static UIViewController *topVC(void) {
         });
 }
 
-- (void)tap {
+- (void)openPanel {
     if (self.dragging) return;
 
-    UIDevice *d = UIDevice.currentDevice;
-    ASIdentifierManager *ad = [ASIdentifierManager sharedManager];
-
-    NSString *msg = [NSString stringWithFormat:
-                     @"IDFV: %@\nIDFA: %@\nModel: %@\nSystem: %@ %@",
-                     d.identifierForVendor.UUIDString,
-                     ad.advertisingIdentifier.UUIDString,
-                     d.model,
-                     d.systemName,
-                     d.systemVersion];
+    NSString *msg = [NSString stringWithFormat:@"%@\n\n%@", realDeviceInfo(), fakeDeviceInfo()];
 
     UIAlertController *a =
-    [UIAlertController alertControllerWithTitle:@"Device Info"
+    [UIAlertController alertControllerWithTitle:@"Device Panel"
                                         message:msg
                                  preferredStyle:UIAlertControllerStyleAlert];
 
-    [a addAction:[UIAlertAction actionWithTitle:@"Regenerate"
+    [a addAction:[UIAlertAction actionWithTitle:@"🔄 Regenerate IDs"
                                           style:UIAlertActionStyleDestructive
                                         handler:^(UIAlertAction * _Nonnull action) {
         regenerateIDs();
+    }]];
+
+    [a addAction:[UIAlertAction actionWithTitle:@"🧹 Full Reset App Data"
+                                          style:UIAlertActionStyleDestructive
+                                        handler:^(UIAlertAction * _Nonnull action) {
+        fullResetAppData();
     }]];
 
     [a addAction:[UIAlertAction actionWithTitle:@"Close"
@@ -181,11 +239,11 @@ static UIViewController *topVC(void) {
 
 @end
 
-#pragma mark - Init
+#pragma mark - INIT
 
 %ctor {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1*NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
-        [SpooferBubble shared];
+        [Bubble shared];
     });
 }

@@ -1,9 +1,8 @@
+
 #import <UIKit/UIKit.h>
-#import <AdSupport/AdSupport.h>
 
+static UIWindow *debugWindow;
 static UITextView *logView;
-
-#define ADD_LOG(fmt, ...) [Logger add:[NSString stringWithFormat:fmt, ##__VA_ARGS__]]
 
 @interface Logger : NSObject
 + (void)add:(NSString *)text;
@@ -11,13 +10,21 @@ static UITextView *logView;
 
 @implementation Logger
 
-+ (void)setupIfNeeded {
-    if (logView) return;
++ (void)setup {
 
-    UIWindow *window = UIApplication.sharedApplication.windows.firstObject;
+    if (debugWindow) return;
 
-    UIView *panel = [[UIView alloc] initWithFrame:CGRectMake(20, 80, 320, 300)];
-    panel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.8];
+    debugWindow = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 340, 300)];
+    debugWindow.windowLevel = UIWindowLevelAlert + 1000;
+    debugWindow.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.85];
+    debugWindow.hidden = NO;
+
+    UIViewController *vc = [UIViewController new];
+    vc.view.backgroundColor = UIColor.clearColor;
+    debugWindow.rootViewController = vc;
+
+    UIView *panel = [[UIView alloc] initWithFrame:CGRectMake(10, 80, 320, 300)];
+    panel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.9];
     panel.layer.cornerRadius = 12;
 
     logView = [[UITextView alloc] initWithFrame:CGRectMake(10, 10, 300, 280)];
@@ -27,54 +34,22 @@ static UITextView *logView;
     logView.font = [UIFont systemFontOfSize:12];
 
     [panel addSubview:logView];
-    [window addSubview:panel];
+    [vc.view addSubview:panel];
 }
 
 + (void)add:(NSString *)text {
+
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self setupIfNeeded];
+        [self setup];
 
         NSString *old = logView.text ?: @"";
         NSString *newText = [old stringByAppendingFormat:@"\n%@", text];
 
         logView.text = newText;
 
-        // auto scroll
         NSRange bottom = NSMakeRange(newText.length, 1);
         [logView scrollRangeToVisible:bottom];
     });
 }
 
 @end
-
-#pragma mark - HOOKS
-
-%hook UIDevice
-
-- (NSUUID *)identifierForVendor {
-    NSUUID *u = %orig;
-    ADD_LOG(@"UIDevice IDFV -> %@", u.UUIDString);
-    return u;
-}
-
-%end
-
-%hook ASIdentifierManager
-
-- (NSUUID *)advertisingIdentifier {
-    NSUUID *u = %orig;
-    ADD_LOG(@"IDFA -> %@", u.UUIDString);
-    return u;
-}
-
-%end
-
-%hook NSUUID
-
-- (NSString *)UUIDString {
-    NSString *s = %orig;
-    ADD_LOG(@"NSUUID -> %@", s);
-    return s;
-}
-
-%end

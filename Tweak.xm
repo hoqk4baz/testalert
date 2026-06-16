@@ -2,6 +2,7 @@
 #import <AdSupport/AdSupport.h>
 #import <dlfcn.h>
 #import <objc/runtime.h>
+#import "fishhook.h"
 
 static NSString *randomUUID(void) {
     return [[NSUUID UUID] UUIDString];
@@ -20,154 +21,119 @@ static NSString *randomString(int length) {
 @interface DeviceSpooferBubble : NSObject
 @property (nonatomic, strong) UIWindow *window;
 @property (nonatomic, strong) UIButton *bubbleButton;
-@property (nonatomic, strong) UIViewController *panelVC;
 @end
 
 @implementation DeviceSpooferBubble
 
 + (instancetype)shared {
     static DeviceSpooferBubble *shared = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        shared = [[DeviceSpooferBubble alloc] init];
-    });
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ shared = [[self alloc] init]; });
     return shared;
 }
 
 - (instancetype)init {
     self = [super init];
-    if (self) {
-        [self createBubble];
-    }
+    if (self) [self createBubble];
     return self;
 }
 
 - (void)createBubble {
-    self.window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 60, 60)];
-    self.window.windowLevel = UIWindowLevelStatusBar + 1;
+    self.window = [[UIWindow alloc] initWithFrame:CGRectMake(20, 100, 60, 60)];
+    self.window.windowLevel = UIWindowLevelAlert + 1;
     self.window.backgroundColor = [UIColor clearColor];
-    
+    self.window.hidden = NO;
+
     self.bubbleButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.bubbleButton.frame = CGRectMake(0, 0, 60, 60);
     self.bubbleButton.backgroundColor = [UIColor systemBlueColor];
     self.bubbleButton.layer.cornerRadius = 30;
-    self.bubbleButton.layer.shadowColor = [UIColor blackColor].CGColor;
-    self.bubbleButton.layer.shadowOffset = CGSizeMake(0, 2);
-    self.bubbleButton.layer.shadowOpacity = 0.5;
     [self.bubbleButton setTitle:@"🔄" forState:UIControlStateNormal];
-    self.bubbleButton.titleLabel.font = [UIFont systemFontOfSize:30];
+    self.bubbleButton.titleLabel.font = [UIFont systemFontOfSize:28];
     
     [self.bubbleButton addTarget:self action:@selector(showPanel) forControlEvents:UIControlEventTouchUpInside];
     
     UIViewController *vc = [[UIViewController alloc] init];
-    vc.view.backgroundColor = [UIColor clearColor];
     [vc.view addSubview:self.bubbleButton];
     self.window.rootViewController = vc;
-    self.window.hidden = NO;
     
-    // Draggable yap
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
     [self.bubbleButton addGestureRecognizer:pan];
 }
 
-- (void)handlePan:(UIPanGestureRecognizer *)pan {
-    CGPoint translation = [pan translationInView:self.window];
-    CGPoint center = self.bubbleButton.center;
-    center.x += translation.x;
-    center.y += translation.y;
-    self.bubbleButton.center = center;
-    [pan setTranslation:CGPointZero inView:self.window];
+- (void)handlePan:(UIPanGestureRecognizer *)g {
+    CGPoint p = [g translationInView:self.window];
+    CGPoint c = self.bubbleButton.center;
+    c.x += p.x; c.y += p.y;
+    self.bubbleButton.center = c;
+    [g setTranslation:CGPointZero inView:self.window];
 }
 
 - (void)showPanel {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Device Spoofer"
-                                                                   message:[self getCurrentDeviceInfo]
+    NSString *info = [NSString stringWithFormat:
+        @"IDFV: %@\nIDFA: %@\nModel: %@",
+        [[UIDevice currentDevice] identifierForVendor].UUIDString ?: @"-",
+        [[ASIdentifierManager sharedManager] advertisingIdentifier].UUIDString ?: @"-",
+        [[UIDevice currentDevice] model]];
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Device Spoofer" 
+                                                                   message:info
                                                             preferredStyle:UIAlertControllerStyleAlert];
     
-    [alert addAction:[UIAlertAction actionWithTitle:@"Değiştir" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
-        [self resetAndSpoof];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Değiştir" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        [self resetAndRestart];
     }]];
-    
     [alert addAction:[UIAlertAction actionWithTitle:@"Kapat" style:UIAlertActionStyleCancel handler:nil]];
     
-    [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:alert animated:YES completion:nil];
+    [[[UIApplication sharedApplication] keyWindow] rootViewController] presentViewController:alert animated:YES completion:nil];
 }
 
-- (NSString *)getCurrentDeviceInfo {
-    UIDevice *device = [UIDevice currentDevice];
-    ASIdentifierManager *idm = [ASIdentifierManager sharedManager];
-    
-    return [NSString stringWithFormat:
-            @"IDFV: %@\n"
-            @"IDFA: %@\n"
-            @"Model: %@\n"
-            @"System: %@ %@",
-            device.identifierForVendor.UUIDString ?: @"-",
-            idm.advertisingIdentifier.UUIDString ?: @"-",
-            device.model,
-            device.systemName, device.systemVersion];
-}
-
-- (void)resetAndSpoof {
-    // Uygulama verilerini temizle
-    NSString *appDomain = [[NSBundle mainBundle] bundleIdentifier];
-    [[NSUserDefaults standardUserDefaults] removePersistentDomainForName:appDomain];
+- (void)resetAndRestart {
+    // App verilerini temizle
+    NSString *domain = [[NSBundle mainBundle] bundleIdentifier];
+    [[NSUserDefaults standardUserDefaults] removePersistentDomainForName:domain];
     [[NSURLCache sharedURLCache] removeAllCachedResponses];
     
-    // Cache klasörlerini temizle
-    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
-    for (NSString *path in paths) {
-        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
-    }
+    // Cache temizle
+    [[NSFileManager defaultManager] removeItemAtPath:NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject error:nil];
     
-    // Yeni spoof değerleri üret (static'leri resetle)
-    [self forceSpoofReset];
-    
-    // Kullanıcıya bilgi ver ve app'i yeniden başlat
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Başarılı"
-                                                                   message:@"Cihaz bilgileri değiştirildi.\nUygulama yeniden başlatılıyor..."
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:alert animated:YES completion:^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            exit(0); // App'i kapat (yeniden açıldığında yeni ID'lerle gelecek)
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Başarılı" 
+                                                              message:@"Veriler temizlendi.\nUygulama yeniden başlatılıyor..." 
+                                                       preferredStyle:UIAlertControllerStyleAlert];
+    [[[UIApplication sharedApplication] keyWindow] rootViewController] presentViewController:a animated:YES completion:^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.8 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            exit(0);
         });
     }];
 }
-
-- (void)forceSpoofReset {
-    // Static değişkenleri sıfırla (sonraki launch'ta yeni değer gelecek)
-    NSLog(@"[DeviceSpoofer] All device identifiers reset.");
-}
-
 @end
 
-// ====================== SPOOFING HOOK'LAR ======================
+// ====================== HOOK'LAR (fishhook ile) ======================
 
-%hook UIDevice
-- (NSUUID *)identifierForVendor {
-    static NSUUID *spoofed = nil;
-    if (!spoofed) spoofed = [[NSUUID alloc] initWithUUIDString:randomUUID()];
-    return spoofed;
+static NSUUID* (*orig_identifierForVendor)(id self, SEL _cmd);
+static NSUUID* spoof_identifierForVendor(id self, SEL _cmd) {
+    static NSUUID *fake = nil;
+    if (!fake) fake = [[NSUUID alloc] initWithUUIDString:randomUUID()];
+    return fake;
 }
-%end
 
-%hook ASIdentifierManager
-- (NSUUID *)advertisingIdentifier {
-    static NSUUID *spoofed = nil;
-    if (!spoofed) spoofed = [[NSUUID alloc] initWithUUIDString:randomUUID()];
-    return spoofed;
-}
-- (BOOL)isAdvertisingTrackingEnabled { return YES; }
-%end
-
-%hookf(CFStringRef, MGCopyAnswer, CFStringRef key) {
-    NSString *k = (__bridge NSString *)key;
-    if ([k containsString:@"UniqueDeviceID"]) return (__bridge CFStringRef)randomUUID();
-    if ([k containsString:@"SerialNumber"]) return (__bridge CFStringRef)randomString(12);
-    return %orig;
+static NSUUID* (*orig_advertisingIdentifier)(id self, SEL _cmd);
+static NSUUID* spoof_advertisingIdentifier(id self, SEL _cmd) {
+    static NSUUID *fake = nil;
+    if (!fake) fake = [[NSUUID alloc] initWithUUIDString:randomUUID()];
+    return fake;
 }
 
 %ctor {
-    NSLog(@"[DeviceSpoofer] ✅ Floating Bubble + Spoofer Loaded!");
-    [DeviceSpooferBubble shared];  // Bubble'ı başlat
+    NSLog(@"[DeviceSpoofer] ✅ Jailbreak'siz mod - Floating Bubble Loaded");
+
+    // fishhook ile hook kur
+    struct rebinding rebindings[] = {
+        {"identifierForVendor", (void *)spoof_identifierForVendor, (void **)&orig_identifierForVendor},
+        {"advertisingIdentifier", (void *)spoof_advertisingIdentifier, (void **)&orig_advertisingIdentifier},
+    };
+    rebind_symbols(rebindings, sizeof(rebindings)/sizeof(rebindings[0]));
+
+    // MobileGestalt için basit hook (daha ileri seviye istersen söyle)
+    [DeviceSpooferBubble shared];
 }

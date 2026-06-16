@@ -26,13 +26,16 @@ static NSString *randomUUID(void) {
 
 - (instancetype)init {
     self = [super init];
-    if (self) [self createBubble];
+    if (self) {
+        [self createBubble];
+    }
     return self;
 }
 
 - (void)createBubble {
-    self.window = [[UIWindow alloc] initWithFrame:CGRectMake(20, 100, 60, 60)];
-    self.window.windowLevel = UIWindowLevelAlert + 1;
+    // Ekranın sağ üst köşesinde başlasın
+    self.window = [[UIWindow alloc] initWithFrame:CGRectMake([[UIScreen mainScreen] bounds].size.width - 80, 80, 60, 60)];
+    self.window.windowLevel = UIWindowLevelAlert + 100;   // Daha üstte olsun
     self.window.backgroundColor = [UIColor clearColor];
     self.window.hidden = NO;
 
@@ -40,15 +43,21 @@ static NSString *randomUUID(void) {
     self.bubbleButton.frame = CGRectMake(0, 0, 60, 60);
     self.bubbleButton.backgroundColor = [UIColor systemBlueColor];
     self.bubbleButton.layer.cornerRadius = 30;
+    self.bubbleButton.layer.shadowColor = [UIColor blackColor].CGColor;
+    self.bubbleButton.layer.shadowOffset = CGSizeMake(0, 3);
+    self.bubbleButton.layer.shadowOpacity = 0.6;
+    
     [self.bubbleButton setTitle:@"🔄" forState:UIControlStateNormal];
-    self.bubbleButton.titleLabel.font = [UIFont systemFontOfSize:28];
+    self.bubbleButton.titleLabel.font = [UIFont systemFontOfSize:32];
     
     [self.bubbleButton addTarget:self action:@selector(showPanel) forControlEvents:UIControlEventTouchUpInside];
     
     UIViewController *vc = [[UIViewController alloc] init];
+    vc.view.backgroundColor = [UIColor clearColor];
     [vc.view addSubview:self.bubbleButton];
     self.window.rootViewController = vc;
     
+    // Sürükleme özelliği
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
     [self.bubbleButton addGestureRecognizer:pan];
 }
@@ -87,11 +96,11 @@ static NSString *randomUUID(void) {
     [[NSURLCache sharedURLCache] removeAllCachedResponses];
     
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Başarılı"
-                                                                   message:@"Uygulama verileri temizlendi.\nYeniden başlatılıyor..."
+                                                                   message:@"Veriler temizlendi.\nUygulama yeniden başlatılıyor..."
                                                             preferredStyle:UIAlertControllerStyleAlert];
     
     [[[[UIApplication sharedApplication] keyWindow] rootViewController] presentViewController:alert animated:YES completion:^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.8 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             exit(0);
         });
     }];
@@ -99,7 +108,7 @@ static NSString *randomUUID(void) {
 
 @end
 
-// ====================== FISHHOOK ======================
+// ====================== HOOKS ======================
 
 static NSUUID* (*orig_identifierForVendor)(id, SEL);
 static NSUUID* spoof_identifierForVendor(id self, SEL _cmd) {
@@ -116,7 +125,7 @@ static NSUUID* spoof_advertisingIdentifier(id self, SEL _cmd) {
 }
 
 %ctor {
-    NSLog(@"[DeviceSpoofer] ✅ Jailbreak'siz Floating Bubble Loaded");
+    NSLog(@"[DeviceSpoofer] ✅ Yüzen baloncuk aktif - App açılışta görünecek");
 
     struct rebinding rebindings[] = {
         {"identifierForVendor", (void *)spoof_identifierForVendor, (void **)&orig_identifierForVendor},
@@ -124,5 +133,8 @@ static NSUUID* spoof_advertisingIdentifier(id self, SEL _cmd) {
     };
     rebind_symbols(rebindings, 2);
 
-    [DeviceSpooferBubble shared];
+    // Bubble'ı hemen başlat
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        [DeviceSpooferBubble shared];
+    });
 }

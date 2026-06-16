@@ -1,25 +1,52 @@
-name: Build Dylib
-on: [push]
+name: Build DeviceSpoofer
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  release:
+    types: [ created ]
 
 jobs:
   build:
-    runs-on: macos-latest
+    name: Build Theos Tweak
+    runs-on: macos-latest   # veya ubuntu-latest (Linux runner da destekliyor)
+
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Compile dylib
+      - name: Install Theos (with cache)
+        uses: Randomblock1/theos-action@v1
+        with:
+          theos-dir: '${{ github.workspace }}/theos'
+          cache: true
+
+      # Opsiyonel: Daha yeni SDK istiyorsan (iOS 18+ vs.)
+      # - name: Download custom SDK
+      #   run: |
+      #     mkdir -p $THEOS/sdks
+      #     cd $THEOS/sdks
+      #     curl -LO https://github.com/theos/sdks/releases/download/18.0/iPhoneOS18.0.sdk.tar.xz
+      #     tar -xf iPhoneOS18.0.sdk.tar.xz
+
+      - name: Build Package
         run: |
-          clang -arch arm64 \
-            -dynamiclib \
-            -fobjc-arc \
-            -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
-            -framework UIKit \
-            -framework Foundation \
-            -o MerhabaAlert.dylib \
-            MerhabaAlert.m
+          export THEOS="${{ github.workspace }}/theos"
+          make package FINALPACKAGE=1
 
-      - name: Upload artifact
+      - name: Upload DEB Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MerhabaAlert.dylib
-          path: MerhabaAlert.dylib
+          name: DeviceSpoofer-Deb
+          path: packages/*.deb
+          retention-days: 30
+
+      - name: Upload dylib (raw)
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeviceSpoofer-dylib
+          path: |
+            obj/*.dylib
+            obj/Tweak.dylib
+          retention-days: 7

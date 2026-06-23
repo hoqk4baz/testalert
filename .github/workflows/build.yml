@@ -1,52 +1,40 @@
-name: Build DeviceSpoofer
+name: Build IDFV Spoofer Dylib
 
 on:
   push:
-    branches: [ main, master ]
-  pull_request:
-  release:
-    types: [ created ]
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
-    name: Build Theos Tweak
-    runs-on: macos-latest   # veya ubuntu-latest (Linux runner da destekliyor)
+    runs-on: macos-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Theos (with cache)
-        uses: Randomblock1/theos-action@v1
-        with:
-          theos-dir: '${{ github.workspace }}/theos'
-          cache: true
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
 
-      # Opsiyonel: Daha yeni SDK istiyorsan (iOS 18+ vs.)
-      # - name: Download custom SDK
-      #   run: |
-      #     mkdir -p $THEOS/sdks
-      #     cd $THEOS/sdks
-      #     curl -LO https://github.com/theos/sdks/releases/download/18.0/iPhoneOS18.0.sdk.tar.xz
-      #     tar -xf iPhoneOS18.0.sdk.tar.xz
-
-      - name: Build Package
+      - name: Build dylib
         run: |
-          export THEOS="${{ github.workspace }}/theos"
-          make package FINALPACKAGE=1
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          
+          clang \
+            -arch arm64 \
+            -shared \
+            -fmodules \
+            -fobjc-arc \
+            -isysroot "$SDK" \
+            -framework UIKit \
+            -framework Foundation \
+            -Xlinker -install_name \
+            -Xlinker @executable_path/Frameworks/idfv_spoofer.dylib \
+            -o idfv_spoofer.dylib \
+            Tweak.m
 
-      - name: Upload DEB Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DeviceSpoofer-Deb
-          path: packages/*.deb
-          retention-days: 30
-
-      - name: Upload dylib (raw)
-        uses: actions/upload-artifact@v4
-        with:
-          name: DeviceSpoofer-dylib
-          path: |
-            obj/*.dylib
-            obj/Tweak.dylib
-          retention-days: 7
+          name: idfv_spoofer
+          path: idfv_spoofer.dylib

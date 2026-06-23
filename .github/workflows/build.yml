@@ -1,4 +1,4 @@
-name: Build IDFV Spoofer Dylib
+name: Build Device Spoofer Dylib
 
 on:
   push:
@@ -13,6 +13,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Clone fishhook
+        run: |
+          git clone https://github.com/facebook/fishhook.git
+          cp fishhook/fishhook.c .
+          cp fishhook/fishhook.h .
+
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
@@ -23,18 +29,19 @@ jobs:
           clang \
             -arch arm64 \
             -shared \
-            -fmodules \
             -fobjc-arc \
             -isysroot "$SDK" \
             -framework UIKit \
             -framework Foundation \
+            -framework Security \
             -Xlinker -install_name \
-            -Xlinker @executable_path/Frameworks/idfv_spoofer.dylib \
-            -o idfv_spoofer.dylib \
-            Tweak.m
+            -Xlinker @executable_path/Frameworks/device_spoofer.dylib \
+            fishhook.c \
+            Tweak.m \
+            -o device_spoofer.dylib
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: idfv_spoofer
-          path: idfv_spoofer.dylib
+          name: device_spoofer
+          path: device_spoofer.dylib

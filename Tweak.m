@@ -2,33 +2,33 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-static NSMutableArray *foundLogs = nil;
-static NSString *targetValue = @"77bc647f";
-
+static NSString *fakeDeviceId = nil;
 static void (*orig_setValue)(id, SEL, NSString*, NSString*) = NULL;
 
 static void hook_setValue(id self, SEL _cmd, NSString *value, NSString *field) {
     @try {
-        if (value && [value hasPrefix:targetValue]) {
-            NSArray *stack = [NSThread callStackSymbols];
-            NSString *log = [NSString stringWithFormat:@"field=%@\nvalue=%@\n%@",
-                field, value,
-                [stack componentsJoinedByString:@"\n"]
-            ];
-            [foundLogs addObject:log];
+        if (field && [field isEqualToString:@"deviceId"]) {
+            // Fake değeri geçir, orijinali geçirme
+            orig_setValue(self, _cmd, fakeDeviceId, field);
+            return;
         }
     } @catch (NSException *e) {}
     
     orig_setValue(self, _cmd, value, field);
 }
 
-@interface DeviceTracer : NSObject
+@interface DeviceSpoofer : NSObject
 @end
 
-@implementation DeviceTracer
+@implementation DeviceSpoofer
 
 + (void)load {
-    foundLogs = [NSMutableArray array];
+    // Her açılışta yeni random hex üret (52 char - orijinalle aynı format)
+    NSMutableString *hex = [NSMutableString stringWithCapacity:52];
+    for (int i = 0; i < 52; i++) {
+        [hex appendFormat:@"%x", arc4random_uniform(16)];
+    }
+    fakeDeviceId = [hex copy];
     
     Method m = class_getInstanceMethod(
         objc_getClass("NSMutableURLRequest"),
@@ -41,7 +41,7 @@ static void hook_setValue(id self, SEL _cmd, NSString *value, NSString *field) {
     }
     
     dispatch_async(dispatch_get_main_queue(), ^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             
             UIWindow *window = nil;
@@ -53,15 +53,9 @@ static void hook_setValue(id self, SEL _cmd, NSString *value, NSString *field) {
             }
             if (!window) return;
             
-            NSString *logs = foundLogs.count > 0
-                ? [foundLogs componentsJoinedByString:@"\n\n---\n\n"]
-                : @"Tespit edilemedi";
-            
-            [UIPasteboard generalPasteboard].string = logs;
-            
             UIAlertController *alert = [UIAlertController
-                alertControllerWithTitle:@"Tracer"
-                message:[NSString stringWithFormat:@"%lu log - panoya kopyalandı", (unsigned long)foundLogs.count]
+                alertControllerWithTitle:@"✅ deviceId Değiştirildi"
+                message:[NSString stringWithFormat:@"Fake deviceId:\n%@", fakeDeviceId]
                 preferredStyle:UIAlertControllerStyleAlert
             ];
             [alert addAction:[UIAlertAction actionWithTitle:@"Tamam" style:UIAlertActionStyleDefault handler:nil]];

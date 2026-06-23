@@ -1,9 +1,0 @@
-Package: com.enza.devicespoofer
-Name: DeviceSpoofer
-Version: 1.0
-Architecture: iphoneos-arm64
-Description: Device fingerprint spoofer dylib (Jailbreak'siz inject için)
-Maintainer: Your Name <you@example.com>
-Author: Your Name
-Section: Tweaks
-# Depends: mobilesubstrate   ← Bu satırı yorum satırı yaptık veya tamamen silebilirsin

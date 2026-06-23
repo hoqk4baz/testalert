@@ -6,15 +6,9 @@
 
 static NSMutableArray *logs = nil;
 
-static void addLog(NSString *msg) {
-    @synchronized(logs) {
-        [logs addObject:msg];
-    }
-}
-
 // 1. IDFV
 static NSUUID *hook_identifierForVendor(id self, SEL _cmd) {
-    addLog(@"IDFV");
+    [logs addObject:@"IDFV"];
     IMP orig = class_getMethodImplementation(objc_getClass("UIDevice"), @selector(identifierForVendor));
     return ((NSUUID*(*)(id,SEL))orig)(self, _cmd);
 }
@@ -26,18 +20,9 @@ static OSStatus hook_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *resul
     @try {
         NSDictionary *q = (__bridge NSDictionary*)query;
         NSString *service = q[(__bridge id)kSecAttrService] ?: @"?";
-        addLog([NSString stringWithFormat:@"Keychain: %@", service]);
+        [logs addObject:[NSString stringWithFormat:@"Keychain: %@", service]];
     } @catch(NSException *e) {}
     return orig_SecItemCopyMatching(query, result);
-}
-
-// 3. NSFileManager
-static NSData *(*orig_contentsAtPath)(id, SEL, NSString*) = NULL;
-static NSData *hook_contentsAtPath(id self, SEL _cmd, NSString *path) {
-    @try {
-        addLog([NSString stringWithFormat:@"File: %@", path.lastPathComponent]);
-    } @catch(NSException *e) {}
-    return orig_contentsAtPath(self, _cmd, path);
 }
 
 @interface DeviceLogger : NSObject
@@ -55,12 +40,6 @@ static NSData *hook_contentsAtPath(id self, SEL _cmd, NSString *path) {
         {"SecItemCopyMatching", hook_SecItemCopyMatching, (void**)&orig_SecItemCopyMatching}
     }, 1);
     
-    Method m3 = class_getInstanceMethod(objc_getClass("NSFileManager"), @selector(contentsAtPath:));
-    if (m3) {
-        orig_contentsAtPath = (NSData*(*)(id,SEL,NSString*))method_getImplementation(m3);
-        method_setImplementation(m3, (IMP)hook_contentsAtPath);
-    }
-    
     dispatch_async(dispatch_get_main_queue(), ^{
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
@@ -75,15 +54,12 @@ static NSData *hook_contentsAtPath(id self, SEL _cmd, NSString *path) {
             if (!window) return;
             
             NSOrderedSet *unique = [NSOrderedSet orderedSetWithArray:logs];
-            NSString *combined = unique.count > 0
-                ? [[unique array] componentsJoinedByString:@"\n"]
-                : @"Tespit edilemedi";
-            
+            NSString *combined = [[unique array] componentsJoinedByString:@"\n"] ?: @"Tespit edilemedi";
             [UIPasteboard generalPasteboard].string = combined;
             
             UIAlertController *alert = [UIAlertController
                 alertControllerWithTitle:@"Hook Log"
-                message:[NSString stringWithFormat:@"%lu unique\nPanoya kopyalandı", (unsigned long)unique.count]
+                message:[NSString stringWithFormat:@"%lu log\nPanoya kopyalandı", unique.count]
                 preferredStyle:UIAlertControllerStyleAlert
             ];
             [alert addAction:[UIAlertAction actionWithTitle:@"Tamam" style:UIAlertActionStyleDefault handler:nil]];

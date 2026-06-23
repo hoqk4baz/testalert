@@ -4,67 +4,63 @@
 #import <Security/Security.h>
 #include "fishhook.h"
 
-static NSUUID *fakeIDFV = nil;
-static NSString *fakeRawValue = nil;
+static NSMutableArray *foundLogs = nil;
+static NSString *targetPrefix = @"77bc647f"; // ilk 8 char yeterli
 
-typedef OSStatus (*SecItemCopyMatching_t)(CFDictionaryRef, CFTypeRef *);
-static SecItemCopyMatching_t orig_CopyMatching = NULL;
+// NSString isEqualToString hook - bu değerin nerede karşılaştırıldığını bul
+typedef BOOL (*isEqual_t)(id, SEL, id);
+static isEqual_t orig_isEqual = NULL;
 
-static NSUUID *hook_identifierForVendor(id self, SEL _cmd) {
-    return fakeIDFV;
-}
-
-static OSStatus hook_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result) {
-    OSStatus status = orig_CopyMatching(query, result);
-    return status;
-}
-
-static void writeDeviceIdToKeychain(NSString *value) {
-    NSArray *services = @[@"deviceUUID3", @"deviceiOSUUEx3"];
-    NSData *valueData = [value dataUsingEncoding:NSUTF8StringEncoding];
-    
-    for (NSString *service in services) {
-        NSDictionary *deleteQuery = @{
-            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-            (__bridge id)kSecAttrService: service
-        };
-        SecItemDelete((__bridge CFDictionaryRef)deleteQuery);
-        
-        NSDictionary *addQuery = @{
-            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-            (__bridge id)kSecAttrService: service,
-            (__bridge id)kSecAttrAccount: @"",
-            (__bridge id)kSecValueData: valueData,
-            (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleAlwaysThisDeviceOnly
-        };
-        OSStatus status = SecItemAdd((__bridge CFDictionaryRef)addQuery, NULL);
-        NSLog(@"[Spoofer] %@ -> status: %d", service, (int)status);
+static BOOL hook_isEqual(id self, SEL _cmd, id other) {
+    if ([self isKindOfClass:[NSString class]] && [other isKindOfClass:[NSString class]]) {
+        NSString *s = (NSString *)self;
+        NSString *o = (NSString *)other;
+        if ([s hasPrefix:targetPrefix] || [o hasPrefix:targetPrefix]) {
+            NSString *trace = [[NSThread callStackSymbols] componentsJoinedByString:@"\n"];
+            NSString *log = [NSString stringWithFormat:@"isEqual:\nself=%@\nother=%@\n\nStack:\n%@", s, o, trace];
+            [foundLogs addObject:log];
+        }
     }
+    return orig_isEqual(self, _cmd, other);
 }
 
-@interface DeviceSpoofer : NSObject
+// NSString stringWithFormat hook - bu değerin nerede üretildiğini bul  
+typedef NSString* (*stringWithFormat_t)(id, SEL, NSString*, ...);
+
+// NSMutableURLRequest setValue:forHTTPHeaderField: hook - header set edilirken yakala
+static void hook_setValueForHTTPHeaderField(id self, SEL _cmd, NSString *value, NSString *field) {
+    if ([field isEqualToString:@"deviceId"] || [value hasPrefix:targetPrefix]) {
+        NSString *trace = [[NSThread callStackSymbols] componentsJoinedByString:@"\n"];
+        NSString *log = [NSString stringWithFormat:@"[HEADER SET]\nfield=%@\nvalue=%@\n\nStack:\n%@", field, value, trace];
+        [foundLogs addObject:log];
+    }
+    
+    // orijinali çağır
+    IMP orig = class_getMethodImplementation(
+        objc_getClass("NSMutableURLRequest"),
+        @selector(setValue:forHTTPHeaderField:)
+    );
+    ((void(*)(id,SEL,NSString*,NSString*))orig)(self, _cmd, value, field);
+}
+
+@interface DeviceTracer : NSObject
 @end
 
-@implementation DeviceSpoofer
+@implementation DeviceTracer
 
 + (void)load {
-    fakeIDFV = [NSUUID UUID];
-    fakeRawValue = [fakeIDFV UUIDString];
+    foundLogs = [NSMutableArray array];
     
-    // 1. Keychain'e fake değeri yaz
-    writeDeviceIdToKeychain(fakeRawValue);
+    // NSMutableURLRequest hook - deviceId header'ı set edilirken yakala
+    Method m = class_getInstanceMethod(
+        objc_getClass("NSMutableURLRequest"),
+        @selector(setValue:forHTTPHeaderField:)
+    );
+    if (m) method_setImplementation(m, (IMP)hook_setValueForHTTPHeaderField);
     
-    // 2. IDFV hook
-    Method m = class_getInstanceMethod(objc_getClass("UIDevice"), @selector(identifierForVendor));
-    if (m) method_setImplementation(m, (IMP)hook_identifierForVendor);
-    
-    // 3. fishhook
-    rebind_symbols((struct rebinding[1]){
-        {"SecItemCopyMatching", hook_SecItemCopyMatching, (void **)&orig_CopyMatching},
-    }, 1);
-    
+    // 5 saniye bekle - uygulama istek atsın
     dispatch_async(dispatch_get_main_queue(), ^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             
             UIWindow *window = nil;
@@ -76,9 +72,16 @@ static void writeDeviceIdToKeychain(NSString *value) {
             }
             if (!window) return;
             
+            NSString *logs = foundLogs.count > 0
+                ? [foundLogs componentsJoinedByString:@"\n\n---\n\n"]
+                : @"Henüz tespit edilmedi - daha uzun bekle";
+            
+            // Alert çok uzun olabilir - UIPasteboard'a kopyala
+            [UIPasteboard generalPasteboard].string = logs;
+            
             UIAlertController *alert = [UIAlertController
-                alertControllerWithTitle:@"✅ Device ID Değiştirildi"
-                message:[NSString stringWithFormat:@"Fake ID:\n%@", fakeRawValue]
+                alertControllerWithTitle:@"Device ID Tracer"
+                message:[NSString stringWithFormat:@"%lu log bulundu.\nPanoya kopyalandı.", (unsigned long)foundLogs.count]
                 preferredStyle:UIAlertControllerStyleAlert
             ];
             [alert addAction:[UIAlertAction actionWithTitle:@"Tamam" style:UIAlertActionStyleDefault handler:nil]];

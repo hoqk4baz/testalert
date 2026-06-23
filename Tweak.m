@@ -13,7 +13,7 @@ static void addLog(NSString *source, NSString *value) {
     }
 }
 
-// 1. IDFV
+// IDFV
 static NSUUID *hook_identifierForVendor(id self, SEL _cmd) {
     IMP orig = class_getMethodImplementation(objc_getClass("UIDevice"), @selector(identifierForVendor));
     NSUUID *result = ((NSUUID*(*)(id,SEL))orig)(self, _cmd);
@@ -21,7 +21,7 @@ static NSUUID *hook_identifierForVendor(id self, SEL _cmd) {
     return result;
 }
 
-// 2. Keychain
+// Keychain
 typedef OSStatus (*SecItemCopyMatching_t)(CFDictionaryRef, CFTypeRef*);
 static SecItemCopyMatching_t orig_SecItemCopyMatching = NULL;
 
@@ -52,7 +52,7 @@ static OSStatus hook_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *resul
     return status;
 }
 
-// 3. NSFileManager contentsAtPath
+// NSFileManager - crash yapmaz çünkü path filtresi var
 static NSData *(*orig_contentsAtPath)(id, SEL, NSString*) = NULL;
 static NSData *hook_contentsAtPath(id self, SEL _cmd, NSString *path) {
     NSData *result = orig_contentsAtPath(self, _cmd, path);
@@ -71,24 +71,6 @@ static NSData *hook_contentsAtPath(id self, SEL _cmd, NSString *path) {
     return result;
 }
 
-// 4. NSString initWithContentsOfFile
-static id (*orig_initWithContentsOfFile)(id, SEL, NSString*) = NULL;
-static id hook_initWithContentsOfFile(id self, SEL _cmd, NSString *path) {
-    id result = orig_initWithContentsOfFile(self, _cmd, path);
-    @try {
-        if (result && path) {
-            NSString *lower = path.lowercaseString;
-            if ([lower containsString:@"uuid"] ||
-                [lower containsString:@"device"] ||
-                [lower containsString:@"udid"] ||
-                [lower containsString:@"ident"]) {
-                addLog([NSString stringWithFormat:@"StringFile[%@]", path.lastPathComponent], result);
-            }
-        }
-    } @catch(NSException *e) {}
-    return result;
-}
-
 @interface DeviceLogger : NSObject
 @end
 
@@ -97,27 +79,17 @@ static id hook_initWithContentsOfFile(id self, SEL _cmd, NSString *path) {
 + (void)load {
     logs = [NSMutableArray array];
     
-    // IDFV
     Method m1 = class_getInstanceMethod(objc_getClass("UIDevice"), @selector(identifierForVendor));
     if (m1) method_setImplementation(m1, (IMP)hook_identifierForVendor);
     
-    // Keychain
     rebind_symbols((struct rebinding[1]){
         {"SecItemCopyMatching", hook_SecItemCopyMatching, (void**)&orig_SecItemCopyMatching}
     }, 1);
     
-    // NSFileManager
     Method m4 = class_getInstanceMethod(objc_getClass("NSFileManager"), @selector(contentsAtPath:));
     if (m4) {
         orig_contentsAtPath = (NSData*(*)(id,SEL,NSString*))method_getImplementation(m4);
         method_setImplementation(m4, (IMP)hook_contentsAtPath);
-    }
-    
-    // NSString initWithContentsOfFile
-    Method m5 = class_getInstanceMethod(objc_getClass("NSString"), @selector(initWithContentsOfFile:));
-    if (m5) {
-        orig_initWithContentsOfFile = (id(*)(id,SEL,NSString*))method_getImplementation(m5);
-        method_setImplementation(m5, (IMP)hook_initWithContentsOfFile);
     }
     
     dispatch_async(dispatch_get_main_queue(), ^{

@@ -1,98 +1,113 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
-#import <Security/Security.h>
-#include "fishhook.h"
 
-static NSMutableArray *logs = nil;
-static NSString *target = @"77bc647f";
+static NSString *fakeDeviceId = nil;
 
-// SecItemCopyMatching - Keychain okumalarını yakala
-typedef OSStatus (*SecItemCopyMatching_t)(CFDictionaryRef, CFTypeRef *);
-static SecItemCopyMatching_t orig_CopyMatching = NULL;
+// 52 char hex mi kontrol et
+static BOOL isDeviceId(NSString *value) {
+    if (!value || value.length != 52) return NO;
+    NSCharacterSet *nonHex = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdefABCDEF"] invertedSet];
+    return ([value rangeOfCharacterFromSet:nonHex].location == NSNotFound);
+}
 
-static OSStatus hook_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result) {
-    OSStatus status = orig_CopyMatching(query, result);
-    
-    if (status == errSecSuccess && result && *result) {
-        void (^checkItem)(NSDictionary *) = ^(NSDictionary *item) {
-            NSData *valueData = item[(__bridge id)kSecValueData];
-            if (!valueData) return;
-            NSString *value = [[NSString alloc] initWithData:valueData encoding:NSUTF8StringEncoding];
-            if (!value) value = [valueData base64EncodedStringWithOptions:0];
-            if (value && [value containsString:target]) {
-                NSString *service = item[(__bridge id)kSecAttrService] ?: @"-";
-                NSString *account = item[(__bridge id)kSecAttrAccount] ?: @"-";
-                NSString *log = [NSString stringWithFormat:@"[KEYCHAIN HIT]\nservice=%@\naccount=%@\nvalue=%@", service, account, value];
-                [logs addObject:log];
-            }
-        };
-        
-        if (CFGetTypeID(*result) == CFDictionaryGetTypeID()) {
-            checkItem((__bridge NSDictionary *)*result);
-        } else if (CFGetTypeID(*result) == CFArrayGetTypeID()) {
-            for (NSDictionary *item in (__bridge NSArray *)*result) {
-                if ([item isKindOfClass:[NSDictionary class]]) checkItem(item);
+static NSString *replaceDeviceId(NSString *str) {
+    if (!str) return str;
+    return [str stringByReplacingOccurrencesOfString:@"[0-9a-fA-F]{52}"
+                                          withString:fakeDeviceId
+                                             options:NSRegularExpressionSearch
+                                               range:NSMakeRange(0, str.length)];
+}
+
+// Header hook
+static void (*orig_setValue)(id, SEL, NSString*, NSString*) = NULL;
+static void hook_setValue(id self, SEL _cmd, NSString *value, NSString *field) {
+    @try {
+        if (isDeviceId(value)) {
+            orig_setValue(self, _cmd, fakeDeviceId, field);
+            return;
+        }
+    } @catch (NSException *e) {}
+    orig_setValue(self, _cmd, value, field);
+}
+
+// URL hook - query params burada
+static void (*orig_setURL)(id, SEL, NSURL*) = NULL;
+static void hook_setURL(id self, SEL _cmd, NSURL *url) {
+    @try {
+        if (url) {
+            NSString *urlStr = url.absoluteString;
+            NSString *replaced = replaceDeviceId(urlStr);
+            if (![replaced isEqualToString:urlStr]) {
+                url = [NSURL URLWithString:replaced];
             }
         }
-    }
-    return status;
+    } @catch (NSException *e) {}
+    orig_setURL(self, _cmd, url);
 }
 
-// NSUserDefaults objectForKey hook
-static id (*orig_objectForKey)(id, SEL, NSString *) = NULL;
-static id hook_objectForKey(id self, SEL _cmd, NSString *key) {
-    id result = orig_objectForKey(self, _cmd, key);
-    if ([result isKindOfClass:[NSString class]] && [result containsString:target]) {
-        NSString *log = [NSString stringWithFormat:@"[USERDEFAULTS HIT]\nkey=%@\nvalue=%@", key, result];
-        [logs addObject:log];
-    }
-    return result;
+// HTTPBody hook - POST body'de gidiyorsa
+static void (*orig_setHTTPBody)(id, SEL, NSData*) = NULL;
+static void hook_setHTTPBody(id self, SEL _cmd, NSData *body) {
+    @try {
+        if (body) {
+            NSString *bodyStr = [[NSString alloc] initWithData:body encoding:NSUTF8StringEncoding];
+            if (bodyStr) {
+                NSString *replaced = replaceDeviceId(bodyStr);
+                if (![replaced isEqualToString:bodyStr]) {
+                    body = [replaced dataUsingEncoding:NSUTF8StringEncoding];
+                }
+            }
+        }
+    } @catch (NSException *e) {}
+    orig_setHTTPBody(self, _cmd, body);
 }
 
-// NSString stringByAppendingString - concatenation sırasında yakala
-static NSString *(*orig_stringByAppending)(id, SEL, NSString *) = NULL;
-static NSString *hook_stringByAppending(id self, SEL _cmd, NSString *str) {
-    NSString *result = orig_stringByAppending(self, _cmd, str);
-    if ([result containsString:target]) {
-        NSString *log = [NSString stringWithFormat:@"[STRING BUILD]\nself=%@\nappend=%@\nresult=%@\n%@",
-            self, str, result,
-            [[NSThread callStackSymbols] componentsJoinedByString:@"\n"]
-        ];
-        [logs addObject:log];
-    }
-    return result;
-}
-
-@interface SourceTracer : NSObject
+@interface DeviceSpoofer : NSObject
 @end
 
-@implementation SourceTracer
+@implementation DeviceSpoofer
 
 + (void)load {
-    logs = [NSMutableArray array];
+    // 52 char random hex üret
+    NSMutableString *hex = [NSMutableString stringWithCapacity:52];
+    for (int i = 0; i < 52; i++) {
+        [hex appendFormat:@"%x", arc4random_uniform(16)];
+    }
+    fakeDeviceId = [hex copy];
     
-    // Keychain hook
-    rebind_symbols((struct rebinding[1]){
-        {"SecItemCopyMatching", hook_SecItemCopyMatching, (void **)&orig_CopyMatching},
-    }, 1);
-    
-    // NSUserDefaults hook
-    Method m1 = class_getInstanceMethod(objc_getClass("NSUserDefaults"), @selector(objectForKey:));
+    // Header hook
+    Method m1 = class_getInstanceMethod(
+        objc_getClass("NSMutableURLRequest"),
+        @selector(setValue:forHTTPHeaderField:)
+    );
     if (m1) {
-        orig_objectForKey = (id(*)(id,SEL,NSString*))method_getImplementation(m1);
-        method_setImplementation(m1, (IMP)hook_objectForKey);
+        orig_setValue = (void(*)(id,SEL,NSString*,NSString*))method_getImplementation(m1);
+        method_setImplementation(m1, (IMP)hook_setValue);
     }
     
-    // NSString hook
-    Method m2 = class_getInstanceMethod(objc_getClass("NSString"), @selector(stringByAppendingString:));
+    // URL hook
+    Method m2 = class_getInstanceMethod(
+        objc_getClass("NSMutableURLRequest"),
+        @selector(setURL:)
+    );
     if (m2) {
-        orig_stringByAppending = (NSString*(*)(id,SEL,NSString*))method_getImplementation(m2);
-        method_setImplementation(m2, (IMP)hook_stringByAppending);
+        orig_setURL = (void(*)(id,SEL,NSURL*))method_getImplementation(m2);
+        method_setImplementation(m2, (IMP)hook_setURL);
+    }
+    
+    // HTTPBody hook
+    Method m3 = class_getInstanceMethod(
+        objc_getClass("NSMutableURLRequest"),
+        @selector(setHTTPBody:)
+    );
+    if (m3) {
+        orig_setHTTPBody = (void(*)(id,SEL,NSData*))method_getImplementation(m3);
+        method_setImplementation(m3, (IMP)hook_setHTTPBody);
     }
     
     dispatch_async(dispatch_get_main_queue(), ^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             
             UIWindow *window = nil;
@@ -104,15 +119,9 @@ static NSString *hook_stringByAppending(id self, SEL _cmd, NSString *str) {
             }
             if (!window) return;
             
-            NSString *output = logs.count > 0
-                ? [logs componentsJoinedByString:@"\n\n---\n\n"]
-                : @"Kaynak bulunamadı";
-            
-            [UIPasteboard generalPasteboard].string = output;
-            
             UIAlertController *alert = [UIAlertController
-                alertControllerWithTitle:@"Source Tracer"
-                message:[NSString stringWithFormat:@"%lu hit - panoya kopyalandı", (unsigned long)logs.count]
+                alertControllerWithTitle:@"✅ Device ID Değiştirildi"
+                message:[NSString stringWithFormat:@"Fake ID:\n%@", fakeDeviceId]
                 preferredStyle:UIAlertControllerStyleAlert
             ];
             [alert addAction:[UIAlertAction actionWithTitle:@"Tamam" style:UIAlertActionStyleDefault handler:nil]];
